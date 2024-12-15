@@ -120,7 +120,7 @@ actions.stealth_cds+=/vanish,if=cooldown.vanish.full_recharge_time<15
 actions.stealth_cds+=/vanish,if=fight_remains<8
 actions.stealth_cds+=/shadowmeld,if=variable.finish_condition&!cooldown.vanish.ready
 
-# Off meta builds vanish rules, limited apl support for builds lacking one of the "mandatory" talents crackshot, underhanded upper hand and subterfuge
+# Off meta builds vanish rules, limited apl support for builds lacking one of the mandatory talents crackshot, underhanded upper hand and subterfuge
 actions.stealth_cds_2=vanish,if=talent.underhanded_upper_hand&talent.subterfuge&!talent.crackshot&buff.adrenaline_rush.up&(variable.ambush_condition|!talent.hidden_opportunity)&(!cooldown.between_the_eyes.ready&buff.ruthless_precision.up|buff.ruthless_precision.down|buff.adrenaline_rush.remains<3)
 actions.stealth_cds_2+=/vanish,if=!talent.underhanded_upper_hand&talent.crackshot&variable.finish_condition
 actions.stealth_cds_2+=/vanish,if=!talent.underhanded_upper_hand&!talent.crackshot&talent.hidden_opportunity&!buff.audacity.up&buff.opportunity.stack<buff.opportunity.max_stack&variable.ambush_condition
