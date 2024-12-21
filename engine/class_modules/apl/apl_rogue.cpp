@@ -192,12 +192,9 @@ void outlaw( player_t* p )
   action_priority_list_t* finish = p->get_action_priority_list( "finish" );
   action_priority_list_t* stealth = p->get_action_priority_list( "stealth" );
   action_priority_list_t* stealth_cds = p->get_action_priority_list( "stealth_cds" );
-  action_priority_list_t* stealth_cds_2 = p->get_action_priority_list( "stealth_cds_2" );
+  action_priority_list_t* stealth_cds_off_meta = p->get_action_priority_list( "stealth_cds_off_meta" );
 
   precombat->add_action( "apply_poison,nonlethal=none,lethal=instant" );
-  precombat->add_action( "flask" );
-  precombat->add_action( "augmentation" );
-  precombat->add_action( "food" );
   precombat->add_action( "snapshot_stats", "Snapshot raid buffed stats before combat begins and pre-potting is done." );
   precombat->add_action( "use_item,name=imperfect_ascendancy_serum" );
   precombat->add_action( "stealth,precombat_seconds=2" );
@@ -241,7 +238,7 @@ void outlaw( player_t* p )
   cds->add_action( "use_item,name=mad_queens_mandate,if=!stealthed.all|fight_remains<=5" );
   cds->add_action( "killing_spree,if=variable.finish_condition&!stealthed.all", "Killing Spree has higher priority than stealth cooldowns" );
   cds->add_action( "call_action_list,name=stealth_cds,if=!stealthed.all&talent.crackshot&talent.underhanded_upper_hand&talent.subterfuge&buff.escalating_blade.stack<4&buff.adrenaline_rush.up&variable.finish_condition", "Primary stealth cooldowns for builds using all of uhuh, crackshot, and subterfuge. These builds only use vanish while not already in stealth, when finish condition is active and adrenaline rush is up. Trickster builds also need to use Coup de Grace if available before vanishing." );
-  cds->add_action( "call_action_list,name=stealth_cds_2,if=!stealthed.all&(!talent.underhanded_upper_hand|!talent.crackshot|!talent.subterfuge)", "Secondary stealth cds list for off meta builds missing at least one of Underhanded Upper Hand, Crackshot or Subterfuge" );
+  cds->add_action( "call_action_list,name=stealth_cds_off_meta,if=!stealthed.all&(!talent.underhanded_upper_hand|!talent.crackshot|!talent.subterfuge)", "Secondary stealth cds list for off meta builds missing at least one of Underhanded Upper Hand, Crackshot or Subterfuge" );
   cds->add_action( "blade_rush,if=energy.base_time_to_max>4&!stealthed.all", "Use Blade Rush at minimal energy outside of stealth" );
   cds->add_action( "potion,if=buff.bloodlust.react|fight_remains<30|buff.adrenaline_rush.up" );
   cds->add_action( "blood_fury" );
@@ -272,12 +269,12 @@ void outlaw( player_t* p )
   stealth_cds->add_action( "vanish,if=fight_remains<8", "Vanish if fight is about to end" );
   stealth_cds->add_action( "shadowmeld,if=variable.finish_condition&!cooldown.vanish.ready" );
 
-  stealth_cds_2->add_action( "vanish,if=talent.underhanded_upper_hand&talent.subterfuge&!talent.crackshot&buff.adrenaline_rush.up&(variable.ambush_condition|!talent.hidden_opportunity)&(!cooldown.between_the_eyes.ready&buff.ruthless_precision.up|buff.ruthless_precision.down|buff.adrenaline_rush.remains<3)", "Off meta builds vanish rules, limited apl support for builds lacking one of the mandatory talents crackshot, underhanded upper hand and subterfuge" );
-  stealth_cds_2->add_action( "vanish,if=!talent.underhanded_upper_hand&talent.crackshot&variable.finish_condition" );
-  stealth_cds_2->add_action( "vanish,if=!talent.underhanded_upper_hand&!talent.crackshot&talent.hidden_opportunity&!buff.audacity.up&buff.opportunity.stack<buff.opportunity.max_stack&variable.ambush_condition" );
-  stealth_cds_2->add_action( "vanish,if=!talent.underhanded_upper_hand&!talent.crackshot&!talent.hidden_opportunity&talent.fateful_ending&(!buff.fatebound_lucky_coin.up&(buff.fatebound_coin_tails.stack>=5|buff.fatebound_coin_heads.stack>=5)|buff.fatebound_lucky_coin.up&!cooldown.between_the_eyes.ready)" );
-  stealth_cds_2->add_action( "vanish,if=!talent.underhanded_upper_hand&!talent.crackshot&!talent.hidden_opportunity&!talent.fateful_ending&talent.take_em_by_surprise&!buff.take_em_by_surprise.up" );
-  stealth_cds_2->add_action( "shadowmeld,if=variable.finish_condition&!cooldown.vanish.ready" );
+  stealth_cds_off_meta->add_action( "vanish,if=talent.underhanded_upper_hand&talent.subterfuge&!talent.crackshot&buff.adrenaline_rush.up&(variable.ambush_condition|!talent.hidden_opportunity)&(!cooldown.between_the_eyes.ready&buff.ruthless_precision.up|buff.ruthless_precision.down|buff.adrenaline_rush.remains<3)", "Off meta builds vanish rules, limited apl support for builds lacking one of the mandatory talents crackshot, underhanded upper hand and subterfuge" );
+  stealth_cds_off_meta->add_action( "vanish,if=!talent.underhanded_upper_hand&talent.crackshot&variable.finish_condition" );
+  stealth_cds_off_meta->add_action( "vanish,if=!talent.underhanded_upper_hand&!talent.crackshot&talent.hidden_opportunity&!buff.audacity.up&buff.opportunity.stack<buff.opportunity.max_stack&variable.ambush_condition" );
+  stealth_cds_off_meta->add_action( "vanish,if=!talent.underhanded_upper_hand&!talent.crackshot&!talent.hidden_opportunity&talent.fateful_ending&(!buff.fatebound_lucky_coin.up&(buff.fatebound_coin_tails.stack>=5|buff.fatebound_coin_heads.stack>=5)|buff.fatebound_lucky_coin.up&!cooldown.between_the_eyes.ready)" );
+  stealth_cds_off_meta->add_action( "vanish,if=!talent.underhanded_upper_hand&!talent.crackshot&!talent.hidden_opportunity&!talent.fateful_ending&talent.take_em_by_surprise&!buff.take_em_by_surprise.up" );
+  stealth_cds_off_meta->add_action( "shadowmeld,if=variable.finish_condition&!cooldown.vanish.ready" );
 }
 //outlaw_apl_end
 
