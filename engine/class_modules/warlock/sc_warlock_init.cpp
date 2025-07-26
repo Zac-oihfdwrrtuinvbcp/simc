@@ -78,6 +78,8 @@ namespace warlock
     warlock_t::init_spells_diabolist();
     warlock_t::init_spells_hellcaller();
     warlock_t::init_spells_soul_harvester();
+
+    version_11_1_0_data = find_spell( 1214442 ); // For 11.1 version checking, new talent: Demonfire Infusion
   }
 
   void warlock_t::init_spells_affliction()
@@ -186,6 +188,12 @@ namespace warlock
     tier.hexflame_aff_2pc = sets->set( WARLOCK_AFFLICTION, TWW1, B2 ); // Should be ID 453643
     tier.hexflame_aff_4pc = sets->set( WARLOCK_AFFLICTION, TWW1, B4 ); // Should be ID 453642
     tier.umbral_lattice = find_spell( 455679 );
+
+    // Liberation of Undermine
+    tier.spliced_aff_2pc = sets->set( WARLOCK_AFFLICTION, TWW2, B2 ); // Should be ID 1215678
+    tier.spliced_aff_4pc = sets->set( WARLOCK_AFFLICTION, TWW2, B4 ); // Should be ID 1215683
+    tier.spliced_aff_jackpot = find_spell( 1219034 );
+    tier.jackpot_ua = find_spell( 1219045 );
   }
 
   void warlock_t::init_spells_demonology()
@@ -321,6 +329,8 @@ namespace warlock
     talents.fiendish_wrath_dmg = find_spell( 386702 );
     talents.fel_explosion = find_spell( 386609 );
 
+    talents.master_summoner = find_talent_spell( talent_tree::SPECIALIZATION, "Master Summoner" );  // Should be ID 1240189
+
     // Additional Tier Set spell data
 
     // Nerub-ar Palace
@@ -328,12 +338,20 @@ namespace warlock
     tier.hexflame_demo_4pc = sets->set( WARLOCK_DEMONOLOGY, TWW1, B4 ); // Should be ID 453645
     tier.empowered_legion_strike = find_spell( 455647 );
 
+    // Liberation of Undermine
+    tier.spliced_demo_2pc = sets->set( WARLOCK_DEMONOLOGY, TWW2, B2 ); // Should be ID 1215679
+    tier.spliced_demo_4pc = sets->set( WARLOCK_DEMONOLOGY, TWW2, B4 ); // Should be ID 1215682
+    tier.greater_dreadstalker = find_spell( 1217615 );
+    tier.demonic_hunger = find_spell( 1217617 );
+
     // Initialize some default values for pet spawners
     warlock_pet_list.wild_imps.set_default_duration( warlock_base.wild_imp->duration() );
 
     warlock_pet_list.dreadstalkers.set_default_duration( talents.call_dreadstalkers_2->duration() );
 
     warlock_pet_list.doomguards.set_default_duration( talents.doomguard->duration() );
+
+    warlock_pet_list.greater_dreadstalkers.set_default_duration( tier.greater_dreadstalker->duration() );
   }
 
   void warlock_t::init_spells_destruction()
@@ -345,7 +363,9 @@ namespace warlock
     talents.backdraft = find_talent_spell( talent_tree::SPECIALIZATION, "Backdraft" ); // Should be ID 196406
     talents.backdraft_buff = find_spell( 117828 );
 
-    talents.rain_of_fire = find_talent_spell( talent_tree::SPECIALIZATION, "Rain of Fire" ); // Should be ID 5740
+    talents.rain_of_fire = find_talent_spell( talent_tree::SPECIALIZATION, 5740 ); // Targeting reticle version
+    if ( talents.rain_of_fire == spell_data_t::not_found() )
+     talents.rain_of_fire = find_talent_spell( talent_tree::SPECIALIZATION, 1214467 ); // If targeting version not found, fall back to checking for on-target version
     talents.rain_of_fire_tick = find_spell( 42223 );
 
     talents.roaring_blaze = find_talent_spell( talent_tree::SPECIALIZATION, "Roaring Blaze" ); // Should be ID 205184
@@ -384,6 +404,8 @@ namespace warlock
     talents.channel_demonfire = find_talent_spell( talent_tree::SPECIALIZATION, "Channel Demonfire" ); // Should be ID 196447
     talents.channel_demonfire_tick = find_spell( 196448 ); // Includes both direct and splash damage values
     talents.channel_demonfire_travel = find_spell( 196449 );
+
+    talents.demonfire_infusion = find_talent_spell( talent_tree::SPECIALIZATION, "Demonfire Infusion" ); // Should be ID 1214442
 
     talents.blistering_atrophy = find_talent_spell( talent_tree::SPECIALIZATION, "Blistering Atrophy" ); // Should be ID 456939
 
@@ -448,8 +470,6 @@ namespace warlock
     talents.power_overwhelming = find_talent_spell( talent_tree::SPECIALIZATION, "Power Overwhelming" ); // Should be ID 387279
     talents.power_overwhelming_buff = find_spell( 387283 );
 
-    talents.diabolic_embers = find_talent_spell( talent_tree::SPECIALIZATION, "Diabolic Embers" ); // Should be ID 387173
-
     talents.dimensional_rift = find_talent_spell( talent_tree::SPECIALIZATION, "Dimensional Rift" ); // Should be ID 387976
     talents.shadowy_tear_summon = find_spell( 394235 );
     talents.shadow_barrage = find_spell( 394237 );
@@ -459,6 +479,8 @@ namespace warlock
     talents.chaos_barrage_tick = find_spell( 387985 );
     talents.chaos_tear_summon = find_spell( 394243 );
     talents.rift_chaos_bolt = find_spell( 394246 );
+
+    talents.dimension_ripper = find_talent_spell( talent_tree::SPECIALIZATION, "Dimension Ripper" ); // Should be ID 457025
 
     talents.decimation = find_talent_spell( talent_tree::SPECIALIZATION, "Decimation" ); // Should be ID 456985
     talents.decimation_buff = find_spell( 457555 );
@@ -470,7 +492,7 @@ namespace warlock
     talents.overfiend_buff = find_spell( 457578 );
     talents.overfiend_cb = find_spell( 434589 );
 
-    talents.dimension_ripper = find_talent_spell( talent_tree::SPECIALIZATION, "Dimension Ripper" ); // Should be ID 457025
+    talents.diabolic_embers = find_talent_spell( talent_tree::SPECIALIZATION, "Diabolic Embers" ); // Should be ID 387173
 
     talents.unstable_rifts = find_talent_spell( talent_tree::SPECIALIZATION, "Unstable Rifts" ); // Should be ID 457064
     talents.dimensional_cinder = find_spell( 460805 );
@@ -481,6 +503,21 @@ namespace warlock
     tier.hexflame_destro_2pc = sets->set( WARLOCK_DESTRUCTION, TWW1, B2 ); // Should be ID 453647
     tier.hexflame_destro_4pc = sets->set( WARLOCK_DESTRUCTION, TWW1, B4 ); // Should be ID 453646
     tier.echo_of_the_azjaqir = find_spell( 455674 );
+
+    // Liberation of Undermine
+    tier.spliced_destro_2pc = sets->set( WARLOCK_DESTRUCTION, TWW2, B2 ); // Should be ID 1215680
+    tier.spliced_destro_4pc = sets->set( WARLOCK_DESTRUCTION, TWW2, B4 ); // Should be ID 1215681
+    tier.spliced_destro_jackpot = find_spell( 1217798 );
+    tier.demonfire_flurry = find_spell( 1217731 );
+
+    // Manaforge omega
+    if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
+    {
+      tier.rampaging_demonic_soul = find_spell( 1239689 );
+      tier.demonic_oculus         = find_spell( 1238810 );
+      tier.eye_blast              = find_spell( 1239510 );
+      tier.demonic_intelligence   = find_spell( 1239569 );
+    }
 
     // Initialize some default values for pet spawners
     warlock_pet_list.infernals.set_default_duration( talents.summon_infernal_main->duration() );
@@ -678,6 +715,11 @@ namespace warlock
 
     buffs.umbral_lattice = make_buff( this, "umbral_lattice", tier.umbral_lattice )
                                ->set_chance( rng_settings.umbral_lattice.setting_value );
+
+    buffs.jackpot_affliction = make_buff( this, "jackpot_affliction", tier.spliced_aff_jackpot )
+                                   ->set_default_value_from_effect( 1 )
+                                   ->set_pct_buff_type( STAT_PCT_BUFF_HASTE )
+                                   ->set_rppm( RPPM_HASTE, tier.spliced_aff_2pc->real_ppm() );
   }
 
   void warlock_t::create_buffs_demonology()
@@ -777,6 +819,46 @@ namespace warlock
                                    { resource_gain( RESOURCE_SOUL_SHARD, talents.overfiend_buff->effectN( 1 ).base_value() / 10.0, gains.summon_overfiend ); } );
 
     buffs.echo_of_the_azjaqir = make_buff( this, "echo_of_the_azjaqir", tier.echo_of_the_azjaqir );
+
+    buffs.demonfire_flurry_trigger = make_buff( this, "demonfire_flurry_trigger", tier.demonfire_flurry )
+                                         ->set_refresh_behavior( buff_refresh_behavior::DURATION )
+                                         ->set_tick_callback( [ this ]( buff_t*, int, timespan_t ){
+                                             proc_actions.jackpot_cdf->target_cache.is_valid = false;
+                                             const auto& tl = proc_actions.jackpot_cdf->target_list();
+
+                                             if ( !tl.empty() )
+                                             {
+                                               proc_actions.jackpot_cdf->set_target( tl[ rng().range( size_t(), tl.size() ) ] );
+                                               proc_actions.jackpot_cdf->execute();
+                                             }
+                                           } );
+
+    timespan_t tick_time = tier.demonfire_flurry->effectN( 1 ).period();
+    timespan_t duration = tier.demonfire_flurry->duration();
+
+    if ( talents.demonfire_mastery.ok() )
+    {
+      tick_time *= 1.0 + talents.demonfire_mastery->effectN( 2 ).percent();
+      duration *= 1.0 + talents.demonfire_mastery->effectN( 3 ).percent();
+    }
+
+    int ticks = as<int>( floor( ( duration / tick_time ) ) );
+    if ( talents.raging_demonfire.ok() )
+    {
+      ticks += as<int>( talents.raging_demonfire->effectN( 1 ).base_value() );
+      tick_time *= 1.0 + talents.raging_demonfire->effectN( 3 ).percent();
+    }
+    duration = ticks * tick_time;
+
+    buffs.demonfire_flurry_trigger->set_period( tick_time );
+    buffs.demonfire_flurry_trigger->set_duration( duration );
+    buffs.demonfire_flurry_trigger->set_tick_time_behavior( buff_tick_time_behavior::UNHASTED );
+    // TODO: Supposedly this is a hasted effect. Not sure if buff_t has a case for this having periodic ticks *and* hasted duration
+    //buffs.demonfire_flurry_trigger->set_tick_time_behavior( buff_tick_time_behavior::HASTED );
+
+    buffs.jackpot_destruction = make_buff( this, "jackpot_destruction", tier.spliced_destro_jackpot )
+                                    ->set_pct_buff_type( STAT_PCT_BUFF_MASTERY )
+                                    ->set_default_value_from_effect( 1 );
   }
 
   void warlock_t::create_buffs_diabolist()
@@ -850,6 +932,15 @@ namespace warlock
     buffs.abyssal_dominion = make_buff( this, "Abyssal Dominion", hero.abyssal_dominion_buff );
 
     buffs.ruination = make_buff( this, "ruination", hero.ruination_buff );
+
+    if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
+    {
+      buffs.demonic_oculus = make_buff( this, "demonic_oculus", tier.demonic_oculus );
+
+      buffs.demonic_intelligence = make_buff( this, "demonic_intelligence", tier.demonic_intelligence )
+                                       ->set_pct_buff_type( STAT_PCT_BUFF_INTELLECT )
+                                       ->set_default_value_from_effect_type( A_MOD_TOTAL_STAT_PERCENTAGE );
+    }
   }
 
   void warlock_t::create_buffs_hellcaller()
@@ -858,6 +949,8 @@ namespace warlock
                             ->set_cooldown( hero.malevolence_buff->cooldown() - 1_s )
                             ->set_pct_buff_type( STAT_PCT_BUFF_HASTE )
                             ->set_default_value_from_effect( 1 );
+
+    buffs.maintained_withering = make_buff( this, "maintained_withering", find_spell( 1239577 ) );
   }
 
   void warlock_t::create_buffs_soul_harvester()
@@ -940,6 +1033,7 @@ namespace warlock
   {
     gains.feast_of_souls = get_gain( "feast_of_souls" );
     gains.shadow_of_death = get_gain( "shadow_of_death" );
+    gains.rampaging_demonic_soul = get_gain( "rampaging_demonic_soul" );
   }
 
   void warlock_t::init_procs()
@@ -975,6 +1069,7 @@ namespace warlock
     procs.tormented_crescendo = get_proc( "tormented_crescendo" );
     procs.ravenous_afflictions = get_proc( "ravenous_afflictions" );
     procs.umbral_lattice = get_proc( "umbral_lattice" );
+    procs.jackpot_affliction = get_proc( "jackpot_affliction" );
 
     for ( size_t i = 0; i < procs.malefic_rapture.size(); i++ )
     {
@@ -992,8 +1087,11 @@ namespace warlock
     procs.spiteful_reconstitution = get_proc( "spiteful_reconstitution" );
     procs.umbral_blaze = get_proc( "umbral_blaze" );
     procs.pact_of_the_imp_mother = get_proc( "pact_of_the_imp_mother" );
+    procs.doom_eternal = get_proc( "doom_eternal" );
     procs.pact_of_the_eredruin = get_proc( "pact_of_the_eredruin" );
     procs.empowered_legion_strike = get_proc( "empowered_legion_strike" );
+    procs.jackpot_demonology = get_proc( "jackpot_demonology" );
+    procs.demonic_core_big_dogs = get_proc( "demonic_core_greater_dreadstalkers" );
 
     for ( size_t i = 0; i < procs.hand_of_guldan_shards.size(); i++ )
     {
@@ -1005,9 +1103,12 @@ namespace warlock
   {
     procs.reverse_entropy = get_proc( "reverse_entropy" );
     procs.rain_of_chaos = get_proc( "rain_of_chaos" );
+    procs.demonfire_infusion_inc = get_proc( "demonfire_infusion_incinerate" );
+    procs.demonfire_infusion_dot = get_proc( "demonfire_infusion_dot" );
     procs.decimation = get_proc( "decimation" );
     procs.dimension_ripper = get_proc( "dimension_ripper" );
     procs.echo_of_the_azjaqir = get_proc( "echo_of_the_azjaqir" );
+    procs.jackpot_destruction = get_proc( "jackpot_destruction" );
   }
 
   void warlock_t::init_procs_diabolist()
@@ -1050,12 +1151,15 @@ namespace warlock
   }
 
   void warlock_t::init_rng_demonology()
-  { }
+  {
+    jackpot_demonology_rng = get_rppm( "jackpot_demonology", tier.spliced_demo_2pc );
+  }
 
   void warlock_t::init_rng_destruction()
   {
     // TOCHECK: Presumed to use deck of cards at 3 out of 20. Long sample test needed to reconfirm in TWW
     rain_of_chaos_rng = get_shuffled_rng( "rain_of_chaos", 3, 20 );
+    jackpot_destruction_rng = get_rppm( "jackpot_destruction", tier.spliced_destro_2pc );
   }
 
   void warlock_t::init_rng_diabolist()
@@ -1102,6 +1206,119 @@ namespace warlock
     }
 
     player_t::init_action_list();
+  }
+
+  std::string warlock_t::aura_expr_from_spell_id( unsigned int spell_id, bool on_self ) const
+  {
+    if ( spell_id == 342938 && !on_self )
+      return "dot.unstable_affliction";
+
+    return player_t::aura_expr_from_spell_id( spell_id, on_self );
+  }
+
+  parsed_assisted_combat_rule_t warlock_t::parse_assisted_combat_rule( const assisted_combat_rule_data_t& rule,
+                                                                       const assisted_combat_step_data_t& step ) const
+  {
+    if ( rule.condition_type == AURA_ON_PLAYER && rule.condition_value_1 == 335052 )
+      return { "1", "Condition discarded as it checks for PvP talent." };
+
+    if ( rule.condition_type == AURA_MISSING_PLAYER && rule.condition_value_1 == 335052 )
+      return { "0", "Condition discarded as it checks for PvP talent." };
+
+    return player_t::parse_assisted_combat_rule( rule, step );
+  }
+
+  std::vector<std::string> warlock_t::action_names_from_spell_id( unsigned int spell_id ) const
+  {
+    if ( spell_id == 172 )  // Wither from corruption
+    {
+      if ( specialization() == WARLOCK_DESTRUCTION )
+        return { "wither" };
+
+      return { "wither", "corruption" };
+    }
+
+    if ( spell_id == 348 )  // Wither from immolate
+      return { "wither", "immolate" };
+
+    if ( spell_id == 686 )  // Shadowbolt
+    {
+      if ( specialization() == WARLOCK_DESTRUCTION )
+        return { "infernal_bolt", "incinerate" };
+
+      return { "infernal_bolt", "shadow_bolt" };
+    }
+
+    if ( spell_id == 105174 )  // Hand of guldan
+      return { "ruination", "hand_of_guldan" };
+
+    if ( spell_id == 116858 )  // Chaos bolt
+      return { "ruination", "chaos_bolt" };
+
+    if ( spell_id == 688 || spell_id == 691 )  // imp & felhunter. Stop infinite summon issue.
+      return { };
+
+    return player_t::action_names_from_spell_id( spell_id );
+  }
+
+  
+  void warlock_t::init_blizzard_action_list()
+  {
+    action_priority_list_t* default_ = get_action_priority_list( "default" );
+    player_t::init_blizzard_action_list();
+
+    // precombat overrides
+    action_priority_list_t* pre_c = get_action_priority_list( "precombat" );
+
+    pre_c->add_action( "summon_pet" );
+
+    switch ( specialization() )
+    {
+      case WARLOCK_DEMONOLOGY:
+        pre_c->add_action( "power_siphon" );
+        pre_c->add_action( "demonbolt,if=!buff.power_siphon.up" );
+        pre_c->add_action( "shadow_bolt" );
+        break;
+      case WARLOCK_DESTRUCTION:
+        pre_c->add_action( "grimoire_of_sacrifice,if=talent.grimoire_of_sacrifice.enabled" );
+        pre_c->add_action( "soul_fire" );
+        pre_c->add_action( "incinerate" );
+        break;
+      case WARLOCK_AFFLICTION:
+        pre_c->add_action( "grimoire_of_sacrifice,if=talent.grimoire_of_sacrifice.enabled" );
+        pre_c->add_action( "haunt" );
+        pre_c->add_action( "unstable_affliction" );
+        break;
+      default:
+        break;
+    }
+
+    // cooldown overrides
+    action_priority_list_t* cooldowns = get_action_priority_list( "cooldowns" );
+    // reset this from player.cpp
+    cooldowns->action_list.clear();
+
+    cooldowns->add_action( "potion" );
+    cooldowns->add_action( "blood_fury" );
+    cooldowns->add_action( "berserking" );
+    cooldowns->add_action( "fireblood" );
+    cooldowns->add_action( "ancestral_call" );
+    cooldowns->add_action( "use_items" );
+
+    switch ( specialization() )
+    {
+      case WARLOCK_DEMONOLOGY:
+        cooldowns->add_action( "summon_demonic_tyrant,if=buff.dreadstalkers.up" );
+        break;
+      case WARLOCK_DESTRUCTION:
+        cooldowns->add_action( "summon_infernal" );
+        break;
+      case WARLOCK_AFFLICTION:
+        cooldowns->add_action( "summon_darkglare,if=dot.soul_rot.ticking|!talent.soul_rot" );
+        break;
+      default:
+        break;
+    }
   }
 
   void warlock_t::add_rng_option( warlock_t::rng_settings_t::rng_setting_t& setting )

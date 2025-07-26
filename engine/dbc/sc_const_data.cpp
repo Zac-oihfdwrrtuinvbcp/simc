@@ -12,9 +12,11 @@
 #include "active_spells.hpp"
 #include "mastery_spells.hpp"
 #include "racial_spells.hpp"
+#include "trait_data.hpp"
 
 #include "generated/sc_spec_list.inc"
 #include "generated/sc_scale_data.inc"
+#include "generated/trait_data.inc"
 #include "sc_extra_data.inc"
 
 #if SC_USE_PTR
@@ -143,6 +145,9 @@ static constexpr std::array<class_passives_entry_t, 51> _class_passives { {
 
 } // ANONYMOUS namespace ====================================================
 
+wowv_t wowv( bool ptr )
+{ return dbc::client_data_version( ptr ); }
+
 const char* dbc::wow_ptr_status( bool ptr )
 #if SC_BETA
 { (void)ptr; return SC_BETA_STR "-BETA"; }
@@ -268,6 +273,7 @@ bool dbc::valid_gem_color( unsigned color )
     case SOCKET_COLOR_THUNDER_CITRINE:
     case SOCKET_COLOR_SEA_CITRINE:
     case SOCKET_COLOR_WIND_CITRINE:
+    case SOCKET_COLOR_RESHII_FIBER:
       return true;
     default:
       return false;
@@ -765,6 +771,11 @@ unsigned dbc::specialization_max_per_class()
   return MAX_SPECS_PER_CLASS;
 }
 
+unsigned dbc::hero_trees_max_per_class()
+{
+  return MAX_HERO_TREES_PER_CLASS;
+}
+
 specialization_e dbc::spec_by_idx( const player_e c, unsigned idx )
 {
   int cid = util::class_id( c );
@@ -827,6 +838,43 @@ int dbc::spec_idx( specialization_e spec )
 {
   static constexpr spec_index_map_t spec_index_map;
   return spec_index_map[ spec ];
+}
+
+namespace
+{
+struct hero_tree_index_map_t
+{
+  std::array<int8_t, hero_talent_e::HERO_MAX> data;
+
+private:
+  std::array<int8_t, MAX_SPEC_CLASS> classes;
+
+public:
+  constexpr hero_tree_index_map_t() : data{}, classes{}
+  {
+    for ( int8_t& value : data )
+      value = -1;
+    for ( size_t hero = 0; hero < std::size( __trait_sub_tree_map_data ); hero++ )
+    {
+      size_t hero_index  = __trait_sub_tree_map_data[ hero ][ 0 ];
+      size_t class_index = __trait_sub_tree_map_data[ hero ][ 1 ];
+      data[ hero_index ] = classes[ class_index ];
+      classes[ class_index ]++;
+    }
+  }
+
+  constexpr int8_t operator[]( hero_talent_e hero_tree ) const
+  {
+    assert( hero_tree < std::size( data ) );
+    return data[ hero_tree ];
+  }
+};
+}  // namespace
+
+int dbc::hero_idx( hero_talent_e hero_talent )
+{
+  static constexpr hero_tree_index_map_t hero_tree_index_map;
+  return hero_tree_index_map[ hero_talent ];
 }
 
 uint32_t dbc::get_school_mask( school_e s )
@@ -1180,7 +1228,9 @@ double dbc_t::spell_scaling( player_e t, unsigned level ) const
 {
   uint32_t class_id = util::class_id( t );
 
-  assert( class_id < dbc_t::class_max_size() + 7 && level > 0 && level <= MAX_SCALING_LEVEL );
+  // "9" is the number of scaling class columns in sc_scale_data.inc from SpellScaling.txt
+  // Adjust this if more tables are added to the scale generator in dbc_extract.py
+  assert( class_id < dbc_t::class_max_size() + 9 && level > 0 && level <= MAX_SCALING_LEVEL );
 #if SC_USE_PTR
   return ptr ? _ptr__spell_scaling[ class_id ][ level - 1 ]
              : __spell_scaling[ class_id ][ level - 1 ];
@@ -1386,6 +1436,15 @@ unsigned dbc_t::specialization_max_class() const
   return ptr ? MAX_SPEC_CLASS : MAX_SPEC_CLASS;
 #else
   return MAX_SPEC_CLASS;
+#endif
+}
+
+unsigned dbc_t::hero_trees_max_per_class() const
+{
+#if SC_USE_PTR
+  return ptr ? MAX_HERO_TREES_PER_CLASS : MAX_HERO_TREES_PER_CLASS;
+#else
+  return MAX_HERO_TREES_PER_CLASS;
 #endif
 }
 

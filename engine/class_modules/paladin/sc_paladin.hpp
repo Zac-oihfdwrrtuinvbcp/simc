@@ -39,11 +39,25 @@ enum armament : unsigned int
   NUM_ARMAMENT  = 2,
 };
 
+enum armament_source : unsigned int
+{
+  LS_HARDCAST           = 0,
+  LS_WINGS              = 1,
+  LS_DIVINE_INSPIRATION = 2,
+};
+
+enum lesser_armament : unsigned int
+{
+  LESSER_WEAPON  = 0,
+  LESSER_BULWARK = 1,
+};
+
 enum consecration_source : unsigned int
 {
   HARDCAST         = 0,
   BLADE_OF_JUSTICE = 1,
   SEARING_LIGHT    = 2,
+  HAMMER_OF_LIGHT  = 3,
 };
 
 enum grand_crusader_source : unsigned int
@@ -85,6 +99,8 @@ struct paladin_td_t : public actor_target_data_t
   {
     buff_t* holy_bulwark;
     buff_t* sacred_weapon;
+    buff_t* lesser_weapon;
+    absorb_buff_t* lesser_bulwark;
   } buffs;
 
   paladin_td_t( player_t* target, paladin_t* paladin );
@@ -129,6 +145,7 @@ public:
     action_t* divine_arbiter;
     action_t* searing_light;
     action_t* searing_light_cons;
+    action_t* hammer_of_light_cons;
 
     // Tier stuff
     action_t* cleansing_flame;  // Prot Tier 31 4pc
@@ -148,8 +165,13 @@ public:
     action_t* armament[ NUM_ARMAMENT ];
     action_t* sacred_weapon_proc_damage;
     action_t* sacred_weapon_proc_heal;
+    action_t* lesser_weapon_proc_damage;
+    action_t* lesser_weapon_proc_heal;
     action_t* refining_fire;
     action_t* eye_for_an_eye;
+
+    action_t* background_avenging_wrath;
+    action_t* background_crusade;
   } active;
 
   // Buffs
@@ -204,6 +226,7 @@ public:
     buff_t* sanctification_empower;  // T31 2pc consecration effect
     buff_t* rising_wrath; // TWW1 4pc
     buff_t* heightened_wrath; // TWW1 4pc
+    buff_t* luck_of_the_draw; // TWW2 2pc Protection
 
     // Ret
     buffs::crusade_buff_t* crusade;
@@ -241,6 +264,10 @@ public:
       buff_t* rite_of_adjuration;
       buff_t* blessing_of_the_forge;  // Sacred Weapon doodad, pseudo invisible buff
       buff_t* fake_solidarity; // Stackable buff that fakes other people having a Sacred Weapon buff
+      buff_t* masterwork;
+      buff_t* lesser_weapon;
+      absorb_buff_t* lesser_bulwark;
+      buff_t* fake_tww3_ls_bh;
     } lightsmith;
 
     struct
@@ -265,9 +292,12 @@ public:
       buff_t* solar_grace;
       buff_t* morning_star_driver;
       buff_t* suns_avatar;
+      buff_t* solar_wrath;
     } herald_of_the_sun;
 
     buff_t* rise_from_ash; // Ret TWW1 4p
+    buff_t* winning_streak; // Ret TWW2 2pc
+    buff_t* all_in; // Ret TWW2 4pc
   } buffs;
 
   // Gains
@@ -279,6 +309,8 @@ public:
     gain_t* sacrosanct_crusade;
     gain_t* blessed_hammer;
     gain_t* moment_of_glory;
+    gain_t* holy_bulwark;
+    gain_t* lesser_bulwark;
 
     // Mana
     gain_t* mana_beacon_of_light;
@@ -292,6 +324,8 @@ public:
     gain_t* hp_crusading_strikes;
     gain_t* hp_divine_auxiliary;
     gain_t* eye_of_tyr;
+    gain_t* luck_of_the_draw;
+    gain_t* all_in_refund;
   } gains;
 
   // Spec Passives
@@ -358,6 +392,8 @@ public:
     cooldown_t* endless_wrath_icd;   // Needed for many random hammer procs
     cooldown_t* hammerfall_icd;
     cooldown_t* art_of_war;
+
+    cooldown_t* tww3_lightsmith_2p_icd; // ICD For 11.2 Lightsmith Tier Set 2 Piece
   } cooldowns;
 
   // Passives
@@ -401,12 +437,12 @@ public:
 
     proc_t* as_grand_crusader;
     proc_t* as_grand_crusader_wasted;
-    proc_t* as_engraved_sigil;
-    proc_t* as_engraved_sigil_wasted;
     proc_t* as_moment_of_glory;
     proc_t* as_moment_of_glory_wasted;
 
     proc_t* divine_inspiration;
+
+    proc_t* templar_tww3_eh_ld;
   } procs;
 
   // Spells
@@ -438,6 +474,8 @@ public:
       const spell_data_t* holy_bulwark_absorb;
       const spell_data_t* forges_reckoning; // Spell triggered by Blessing of the Forge (Shield of the Righteous)
       const spell_data_t* sacred_word;      // Spell triggered by Blessing of the Forge (Word of Glory)
+      const spell_data_t* lesser_bulwark; // TWW3 Absorb
+      const spell_data_t* lesser_weapon; // TWW3 Damage
     } lightsmith;
 
     struct
@@ -452,13 +490,16 @@ public:
     {
       const spell_data_t* gleaming_rays;
       const spell_data_t* dawnlight_aoe_metadata;
+      const spell_data_t* solar_wrath;  // Herald TWW3 4p
     } herald_of_the_sun;
 
     const spell_data_t* highlords_judgment_hidden;
+
+    const spell_data_t* winning_streak; // Ret TWW2 2p
+    const spell_data_t* all_in; // Ret TWW2 4p
   } spells;
 
   struct rppms_t {
-    real_ppm_t* radiant_glory;
     real_ppm_t* judge_jury_and_executioner;
   } rppm;
 
@@ -758,22 +799,6 @@ public:
 
       const spell_data_t* suns_avatar;
     } herald_of_the_sun;
-
-    // Remove after 11.0.5
-    const spell_data_t* auras_of_swift_vengeance;
-    const spell_data_t* seasoned_warhorse;
-    const spell_data_t* justification;
-    const spell_data_t* seal_of_mercy;
-    const spell_data_t* crusaders_reprieve;
-    const spell_data_t* strength_of_conviction;
-    const spell_data_t* seal_of_alacrity;
-    const spell_data_t* incandescence;
-    const spell_data_t* touch_of_light;
-    const spell_data_t* seal_of_order;
-    const spell_data_t* fading_light;
-
-    
-
   } talents;
 
   // Paladin options
@@ -789,11 +814,11 @@ public:
 
   season next_season;
   armament next_armament;
+  lesser_armament next_lesser_armament;
   double radiant_glory_accumulator;
 
   int holy_power_generators_used;
   int melee_swing_count;
-
   // Helper variables to not always RNG the correct target
   player_t* random_weapon_target;
   player_t* random_bulwark_target;
@@ -812,6 +837,9 @@ public:
   virtual void init_rng() override;
   virtual void init_spells() override;
   virtual void init_action_list() override;
+  std::vector<std::string> action_names_from_spell_id( unsigned int spell_id ) const override;
+  parsed_assisted_combat_rule_t parse_assisted_combat_rule( const assisted_combat_rule_data_t& rule,
+                                                            const assisted_combat_step_data_t& step ) const override;
   virtual bool validate_fight_style( fight_style_e style ) const override;
   virtual void reset() override;
   virtual std::unique_ptr<expr_t> create_expression( util::string_view name ) override;
@@ -862,7 +890,7 @@ public:
   void trigger_holy_shield( action_state_t* s );
   void trigger_laying_down_arms();
   void trigger_empyrean_hammer( player_t* target, int number_to_trigger, timespan_t delay, bool random_after_first = false );
-  void trigger_lights_deliverance(bool triggered_by_hol = false);
+  void trigger_lights_deliverance();
   void tww1_4p_prot();
   void heartfire( action_state_t* s );
   void t29_4p_prot();
@@ -874,8 +902,9 @@ public:
   bool standing_in_consecration() const;
   bool standing_in_hallow() const;
   void adjust_health_percent();
-  void cast_holy_armaments( player_t* target, armament usedArmament, bool changeArmament, bool random );
-  void trigger_greater_judgment( paladin_td_t* targetdata );
+  void cast_holy_armaments( player_t* target, armament usedArmament, armament_source src );
+  void cast_lesser_armament( int amount, lesser_armament usedArmament );
+  void trigger_greater_judgment( paladin_td_t* targetdata, int num_stacks );
 
   // Returns true if AW/Crusade is up, or if the target is below 20% HP.
   // This isn't in HoW's target_ready() so it can be used in the time_to_hpg expression
@@ -935,7 +964,10 @@ public:
   {
     return !( talents.crusading_strikes->ok() );
   }
-  dbc_proc_callback_t* create_sacred_weapon_callback(paladin_t* source, player_t* target);
+  dbc_proc_callback_t* create_sacred_weapon_callback( paladin_t* source, player_t* target );
+  dbc_proc_callback_t* create_lesser_weapon_callback( paladin_t* source, player_t* target );
+
+  std::vector<int> fake_lesser_weapon_set;
 };
 
 namespace buffs
@@ -1086,6 +1118,31 @@ struct holy_bulwark_absorb_t : public absorb_buff_t
   }
 };
 
+struct lesser_bulwark_buff_t : public absorb_buff_t
+{
+  paladin_t* caster;
+  lesser_bulwark_buff_t(paladin_td_t* td)
+    : absorb_buff_t(td->target, "lesser_bulwark_ally_" + td->source->name_str + "_" + td->target->name_str,
+      debug_cast<paladin_t*>(td->source)->spells.lightsmith.lesser_bulwark)
+  {
+    caster = debug_cast<paladin_t*>( td->source );
+    set_absorb_source( caster->get_stats( "lesser_bulwark_absorb_" + td->target->name_str ) );
+  }
+  lesser_bulwark_buff_t( paladin_t* p ) : absorb_buff_t( p, "lesser_bulwark", p->spells.lightsmith.lesser_bulwark )
+  {
+    caster = p;
+    set_absorb_source( caster->get_stats( "lesser_bulwark_absorb" ) );
+  }
+
+  bool trigger(int stacks, double value, double chance, timespan_t duration) override
+  {
+    value      = value < 0 ? 0 : value;
+    double MAP = caster->composite_melee_attack_power() *caster->spells.lightsmith.lesser_bulwark->effectN( 1 ).ap_coeff();
+    MAP *= 1.0 + caster->composite_heal_versatility();
+    return absorb_buff_t::trigger( stacks, value + MAP, chance, duration );
+  }
+};
+
 struct holy_bulwark_buff_t : public buff_t
 {
   holy_bulwark_absorb_t* absorb;
@@ -1176,13 +1233,14 @@ public:
   // Damage increase whitelists
   struct affected_by_t
   {
-    bool avenging_wrath, judgment, blessing_of_dawn, seal_of_reprisal, seal_of_order, divine_purpose,
+    bool avenging_wrath, judgment, blessing_of_dawn, seal_of_reprisal, divine_purpose,
       divine_purpose_cost, sacred_strength;                                                // Shared
     bool crusade, highlords_judgment, highlords_judgment_hidden, final_reckoning_st, final_reckoning_aoe,
-      blades_of_light, divine_hammer, ret_t29_2p, ret_t29_4p, rise_from_ash; // Ret
+      blades_of_light, ret_t29_2p, ret_t29_4p, rise_from_ash, winning_streak,
+      all_in; // Ret
     bool avenging_crusader;                                                                // Holy
-    bool bastion_of_light, sentinel, heightened_wrath;                                     // Prot
-    bool gleaming_rays; // Herald of the Sun
+    bool bastion_of_light, sentinel, heightened_wrath, luck_of_the_draw;  // Prot
+    bool gleaming_rays, solar_wrath; // Herald of the Sun
   } affected_by;
 
   // haste scaling bools
@@ -1227,18 +1285,11 @@ public:
           this->data().affected_by( p->sets->set( PALADIN_RETRIBUTION, T29, B4 )->effectN( 1 ) );
       this->affected_by.rise_from_ash =
           this->data().affected_by( p->find_spell( 454693 )->effectN( 1 ) );
-      if ( p->talents.divine_hammer->ok() )
-      {
-        for ( auto i = 2; i < 5; i++ )
-        {
-          auto label = p->talents.divine_hammer->effectN( i );
-          if ( this->data().affected_by( label ) || this->data().affected_by_category( label ) )
-          {
-            this->affected_by.divine_hammer = true;
-            break;
-          }
-        }
-      }
+
+      this->affected_by.winning_streak = this->data().affected_by( p->spells.winning_streak->effectN( 1 ) );
+      this->affected_by.all_in = this->data().affected_by( p->spells.all_in->effectN( 1 ) );
+      this->affected_by.solar_wrath    = p->sets->has_set_bonus( HERO_HERALD_OF_THE_SUN, TWW3, B4 ) &&
+                                      this->data().affected_by( p->spells.herald_of_the_sun.solar_wrath->effectN( 1 ) );
     }
     if ( p->specialization() == PALADIN_HOLY )
     {
@@ -1260,6 +1311,7 @@ public:
     this->affected_by.seal_of_reprisal    = this->data().affected_by( p->talents.seal_of_reprisal->effectN( 1 ) );
     this->affected_by.blessing_of_dawn    = this->data().affected_by( p->find_spell( 385127 )->effectN( 1 ) );
     this->affected_by.sacred_strength     = this->data().affected_by( p->talents.sacred_strength->effectN( 1 ) );
+    this->affected_by.luck_of_the_draw    = this->data().affected_by( p->buffs.luck_of_the_draw->data().effectN( 1 ) );
 
     if ( p->talents.penitence->ok() )
     {
@@ -1351,6 +1403,10 @@ public:
 
   void execute() override
   {
+    bool had_winning_streak = false;
+    if ( affected_by.winning_streak && p()->buffs.winning_streak->up() )
+      had_winning_streak = true;
+
     ab::execute();
 
     if ( ( this->affected_by.blades_of_light || always_do_capstones ) && p()->talents.divine_arbiter->ok() )
@@ -1376,9 +1432,18 @@ public:
       p()->buffs.templar.shake_the_heavens->extend_duration( p(), extension );
     }
 
-    if ( affected_by.divine_hammer && p()->buffs.divine_hammer->up() )
+    if ( had_winning_streak && ab::harmful && !ab::background )
     {
-      p()->buffs.divine_hammer->current_value = p()->buffs.divine_hammer->current_value * 1.15;
+      if ( ab::rng().roll( p()->buffs.winning_streak->data().effectN( 2 ).percent() ) )
+      {
+        p()->buffs.winning_streak->expire();
+        // no refreshes in logs afaict
+        if ( p()->sets->has_set_bonus( PALADIN_RETRIBUTION, TWW2, B4 ) && !p()->buffs.all_in->up() )
+        {
+          p()->buffs.all_in->trigger();
+          p()->resource_gain( ab::current_resource(), ab::last_resource_cost, p()->gains.all_in_refund );
+        }
+      }
     }
   }
 
@@ -1409,7 +1474,7 @@ public:
 
     if ( affected_by.gleaming_rays && p()->buffs.herald_of_the_sun.gleaming_rays->up() )
     {
-      am *= 1.0 + p()->spells.herald_of_the_sun.gleaming_rays->effectN( 1 ).percent();
+      am *= 1.0 + ( p()->buffs.herald_of_the_sun.gleaming_rays->value() );
     }
 
     if ( p()->specialization() == PALADIN_RETRIBUTION )
@@ -1428,6 +1493,16 @@ public:
       if ( affected_by.crusade && p()->buffs.crusade->up() )
       {
         am *= 1.0 + p()->buffs.crusade->get_damage_mod();
+      }
+
+      if ( affected_by.winning_streak && p()->buffs.winning_streak->up() )
+      {
+        am *= 1.0 + p()->buffs.winning_streak->stack_value();
+      }
+
+      if ( affected_by.all_in && p()->buffs.all_in->up() )
+      {
+        am *= 1.0 + p()->buffs.all_in->value();
       }
     }
 
@@ -1481,6 +1556,16 @@ public:
       // Multiply by stack count
       bod_mult *= p()->buffs.blessing_of_dawn->stack();
       am *= 1.0 + bod_mult;
+    }
+
+    if ( affected_by.luck_of_the_draw && p()->buffs.luck_of_the_draw->up() )
+    {
+      am *= 1.0 + p()->buffs.luck_of_the_draw->data().effectN( 1 ).percent();
+    }
+
+    if (affected_by.solar_wrath && p()->buffs.herald_of_the_sun.solar_wrath->up())
+    {
+      am *= 1.0 + p()->sets->set( HERO_HERALD_OF_THE_SUN, TWW3, B4 )->effectN( 1 ).percent();
     }
 
     return am;
@@ -1756,6 +1841,11 @@ public:
       return 0.0;
     }
 
+    if ( ab::affected_by.all_in && ab::p()->buffs.all_in->up() )
+    {
+      return 0.0;
+    }
+
     return ab::cost();
   }
 
@@ -1764,7 +1854,7 @@ public:
     paladin_t* p = ab::p();
     ab::impact( s );
 
-    if ( ab::aoe == 0 && p->talents.rush_of_light->ok() && s->result == RESULT_CRIT )
+    if ( ab::aoe == 0 && !is_hammer_of_light_driver && p->talents.rush_of_light->ok() && s->result == RESULT_CRIT )
     {
       p->buffs.rush_of_light->trigger();
     }
@@ -1773,7 +1863,8 @@ public:
     {
       int additionalTargets = 0;
       if ( p->buffs.templar.shake_the_heavens->up() )
-        additionalTargets += as<int>( p->talents.templar.hammerfall->effectN( 2 ).base_value() );
+        // Disappeared from spell data
+        additionalTargets += 1; //as<int>( p->talents.templar.hammerfall->effectN( 2 ).base_value() );
       p->trigger_empyrean_hammer( nullptr, 1 + additionalTargets,
                                   timespan_t::from_millis( p->talents.templar.hammerfall->effectN( 1 ).base_value() ),
                                   true );
@@ -1786,7 +1877,7 @@ public:
       td->debuff.vanguard_of_justice->trigger();
     }
 
-    if ( ab::result_is_hit( s->result ) &&  p->buffs.herald_of_the_sun.dawnlight->up() )
+    if ( ab::result_is_hit( s->result ) && p->buffs.herald_of_the_sun.dawnlight->up() )
     {
       p->active.dawnlight->execute_on_target( s->target );
       p->buffs.herald_of_the_sun.dawnlight->decrement();
@@ -1798,14 +1889,10 @@ public:
     // p variable just to make this look neater
     paladin_t* p = ab::p();
 
-    ab::execute();
-
-    // if this is a vanq-hammer-based DS, don't do this stuff
-    if ( ab::background && is_divine_storm )
-      return;
-
     bool isFreeSLDPSpender = p->buffs.divine_purpose->up() || ( is_wog && p->buffs.shining_light_free->up() ) ||
-                             ( is_divine_storm && p->buffs.empyrean_power->up() );
+                             ( is_divine_storm && p->buffs.empyrean_power->up() ) || p->buffs.all_in->up();
+
+    bool isFreeHoL = is_hammer_of_light_driver && p->buffs.templar.hammer_of_light_free->up();
 
     double num_hopo_spent = as<double>( holy_power_consumer_t::cost() );
     if ( is_hammer_of_light_driver && !p->buffs.templar.hammer_of_light_free->up() )
@@ -1826,6 +1913,32 @@ public:
       }
     }
 
+    // Hammer of Light specifically gets benefit from Crusade stacks that it applies
+    if ( is_hammer_of_light_driver && num_hopo_spent > 0 && p->buffs.crusade->check() )
+    {
+      p->buffs.crusade->trigger( as<int>( num_hopo_spent ) );
+    }
+
+    // Empyrean Legacy Divine Storms appear to extend Divine Hammer by 1.5s, so putting this before the
+    // Divine Storm early return
+    if ( p->talents.divine_hammer->ok() && p->buffs.divine_hammer->up() && ( num_hopo_spent > 0 || isFreeHoL || ( is_divine_storm && ab::background ) ) )
+    {
+      auto base_cost = isFreeHoL ? hol_cost : ( ( is_divine_storm && ab::background ) ? 3.0 : num_hopo_spent );
+      auto extra_time = timespan_t::from_millis( p->buffs.divine_hammer->data().effectN( 2 ).base_value() * base_cost );
+      auto new_duration = p->buffs.divine_hammer->remains() + extra_time;
+      if ( new_duration > p->buffs.divine_hammer->data().duration() )
+      {
+        extra_time = p->buffs.divine_hammer->data().duration() - p->buffs.divine_hammer->remains();
+      }
+      p->buffs.divine_hammer->extend_duration( p, extra_time );
+    }
+
+    ab::execute();
+
+    // if this is a vanq-hammer-based DS, don't do this stuff
+    if ( ab::background && is_divine_storm )
+      return;
+
     if ( p->talents.righteous_cause->ok() && p->cooldowns.righteous_cause_icd->up() )
     {
       // TODO: verify that this is how this works
@@ -1845,7 +1958,7 @@ public:
     if ( p->talents.relentless_inquisitor->ok() && !ab::background )
       p->buffs.relentless_inquisitor->trigger();
 
-    if ( num_hopo_spent > 0 && p->buffs.crusade->check() )
+    if ( num_hopo_spent > 0 && p->buffs.crusade->check() && !is_hammer_of_light_driver )
     {
       p->buffs.crusade->trigger( as<int>( num_hopo_spent ) );
     }
@@ -1858,7 +1971,7 @@ public:
       // of procs pretty closely, tested on a couple thousand TV casts.
       // This will need periodic re-verification, but is good enough for beta
       // purposes.
-      p->radiant_glory_accumulator += ab::rng().range( 0.0, 0.225 );
+      p->radiant_glory_accumulator += ab::rng().range( 0.0, 0.075 * num_hopo_spent );
       if ( p->radiant_glory_accumulator >= 1.0 )
       {
         bool do_avatar = p->talents.herald_of_the_sun.suns_avatar->ok() && !( p->buffs.avenging_wrath->up() || p->buffs.crusade->up() );
@@ -1866,10 +1979,18 @@ public:
         // TODO(mserrano): get this from spell data
         if ( p->talents.crusade->ok() )
         {
+          if ( !p->buffs.crusade->up() )
+          {
+            p->active.background_crusade->execute_on_target( p );
+          }
           p->buffs.crusade->extend_duration_or_trigger( timespan_t::from_seconds( 5 ) );
         }
         else if ( p->talents.avenging_wrath->ok() )
         {
+          if ( !p->buffs.avenging_wrath->up() )
+          {
+            p->active.background_avenging_wrath->execute_on_target( p );
+          }
           p->buffs.avenging_wrath->extend_duration_or_trigger( timespan_t::from_seconds( 4 ) );
         }
         p->radiant_glory_accumulator -= 1.0;
@@ -1881,8 +2002,7 @@ public:
       }
     }
 
-    // 2024-08-04 Currently, Hammer of Light doesn't affect Righteous Protector at all
-    if ( p->talents.righteous_protector->ok() && ( ( is_hammer_of_light_driver && !p->bugs ) || !is_hammer_of_light ) )
+    if ( p->talents.righteous_protector->ok() && ( !is_hammer_of_light || is_hammer_of_light_driver) )
     {
       // 23-03-23 Not sure when this bug was introduced, but free Holy Power Spenders ignore RP ICD
       if ( p->cooldowns.righteous_protector_icd->up() ||
@@ -1895,6 +2015,12 @@ public:
         ab::sim->print_debug(
             "Righteous protector reduced the cooldown of Avenging Wrath and Guardian of Ancient Kings by {} sec",
             num_hopo_spent );
+
+        if ( p->bugs && is_hammer_of_light_driver && p->buffs.divine_purpose->up() )
+        {
+          // 24.07.25 Fluttershy - Hammer of Light reduces the cooldowns by 4s, if Divine Purpose was up. Probably because of Ret+Prot cost being 8 Holy Power total.
+          reduction = -4_s;
+        }
 
         p->cooldowns.avenging_wrath->adjust( reduction );
         p->cooldowns.sentinel->adjust( reduction );
@@ -2038,8 +2164,11 @@ struct delayed_execute_event_t : public event_t
 
 struct avenging_wrath_t : public paladin_spell_t
 {
+  bool is_proc_background;
+  avenging_wrath_t( paladin_t* p );
   avenging_wrath_t( paladin_t* p, util::string_view options_str );
   void execute() override;
+  action_state_t* new_state() override;
 };
 
 struct judgment_t : public paladin_melee_attack_t

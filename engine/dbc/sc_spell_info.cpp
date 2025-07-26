@@ -942,6 +942,7 @@ static constexpr auto _category_flag_strings = util::make_static_map<unsigned, s
   { 3, "Cooldown in Days"                 },
   { 4, "Reset Charges on Encounter End"   },
   { 5, "Reset Coooldown on Encounter End" },
+  { 6, "Unaffected by Modify Time Rate"   },
 } );
 
 static constexpr auto _property_type_strings = util::make_static_map<int, std::string_view>( {
@@ -1084,6 +1085,7 @@ static constexpr auto _effect_type_strings = util::make_static_map<unsigned, std
   { 202, "Apply Player/Pet Aura"    },
   { 260, "Summon Stabled Pet"       },
   { 290, "Reduce Remaining Cooldown"},
+  { 293, "Immediate Cooldown Recharge (Category)"},
 } );
 
 static constexpr auto _effect_subtype_strings = util::make_static_map<unsigned, std::string_view>( {
@@ -1289,7 +1291,7 @@ static constexpr auto _effect_subtype_strings = util::make_static_map<unsigned, 
   { 418, "Modify Max Resource"                               },
   { 419, "Modify Mana Pool%"                                 },
   { 421, "Modify Absorb% Done"                               },
-  { 422, "Modify Absorb% Done"                               },
+  { 422, "Modify Absorb% Received"                           },
   { 429, "Modify Pet Damage Done%"                           },
   { 441, "Modify Multistrike%"                               },
   { 443, "Modify Leech%"                                     },
@@ -1687,7 +1689,7 @@ std::ostringstream& spell_info::effect_to_str( const dbc_t& dbc, const spell_dat
     tokens.emplace_back( fmt::format( "Resource: {}", util::resource_type_string( util::translate_power_type(
                                                         static_cast<power_e>( e->misc_value1() ) ) ) ) );
   }
-  else if ( e->type() == E_APPLY_AURA && e->subtype() == A_MOD_STAT )
+  else if ( e->type() == E_APPLY_AURA && ( e->subtype() == A_MOD_STAT || e->subtype() == A_MOD_PERCENT_STAT ) )
   {
     auto misc1 = e->misc_value1();
     if ( misc1 < -2 || misc1 >= STAT_MAX )
@@ -1735,7 +1737,20 @@ std::ostringstream& spell_info::effect_to_str( const dbc_t& dbc, const spell_dat
 
   if ( e->misc_value2() != 0 )
   {
-    if ( e->subtype() == A_ADD_PCT_LABEL_MODIFIER || e->subtype() == A_ADD_FLAT_LABEL_MODIFIER )
+    if ( e->subtype() == A_MOD_TOTAL_STAT_PERCENTAGE )
+    {
+      auto misc2 = e->misc_value2();
+      size_t idx = 0;
+      while ( misc2 )
+      {
+        if ( misc2 & 0b1 )
+          tokens.emplace_back( fmt::format( "Stat: {}", util::stat_type_abbrev( static_cast<stat_e>( idx + 1 ) ) ) );
+
+        misc2 >>= 1;
+        idx++;
+      }
+    }
+    else if ( e->subtype() == A_ADD_PCT_LABEL_MODIFIER || e->subtype() == A_ADD_FLAT_LABEL_MODIFIER )
     {
       tokens.emplace_back( fmt::format( "Misc Value 2: {} (Label)", e->misc_value2() ) );
     }

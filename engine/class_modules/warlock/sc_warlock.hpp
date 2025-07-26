@@ -13,6 +13,7 @@ struct warlock_t;
 enum version_check_e
 {
   VERSION_PTR,
+  VERSION_11_1_0,
   VERSION_ANY
 };
 
@@ -46,6 +47,7 @@ struct warlock_td_t : public actor_target_data_t
   propagate_const<dot_t*> dots_vile_taint;
   propagate_const<dot_t*> dots_drain_life_aoe; // Soul Rot effect
   propagate_const<dot_t*> dots_soul_rot;
+  propagate_const<dot_t*> dots_jackpot_ua; // TWW 11.1 4pc version of Unstable Affliction
 
   propagate_const<buff_t*> debuffs_haunt;
   propagate_const<buff_t*> debuffs_shadow_embrace;
@@ -89,6 +91,7 @@ struct warlock_td_t : public actor_target_data_t
   void target_demise();
 
   int count_affliction_dots() const;
+  int count_affliction_dots( bool ) const;
 };
 
 struct warlock_t : public player_t
@@ -156,6 +159,7 @@ public:
     spawner::pet_spawner_t<pets::demonology::grimoire_felguard_pet_t, warlock_t> grimoire_felguards;
     spawner::pet_spawner_t<pets::demonology::wild_imp_pet_t, warlock_t> wild_imps;
     spawner::pet_spawner_t<pets::demonology::doomguard_t, warlock_t> doomguards;
+    spawner::pet_spawner_t<pets::demonology::greater_dreadstalker_t, warlock_t> greater_dreadstalkers;
 
     spawner::pet_spawner_t<pets::destruction::shadowy_tear_t, warlock_t> shadow_rifts;
     spawner::pet_spawner_t<pets::destruction::unstable_tear_t, warlock_t> unstable_rifts;
@@ -170,6 +174,8 @@ public:
     spawner::pet_spawner_t<pets::diabolist::infernal_fragment_t, warlock_t> fragments;
 
     spawner::pet_spawner_t<pets::diabolist::diabolic_imp_t, warlock_t> diabolic_imps;
+
+    spawner::pet_spawner_t<pets::soul_harvester::rampaging_demonic_soul_t, warlock_t> demonic_souls;
 
     pets_t( warlock_t* w );
   } warlock_pet_list;
@@ -344,7 +350,7 @@ public:
     player_talent_t the_houndmasters_gambit;
     const spell_data_t* houndmasters_aura; // Contains actual referenced % increase
     player_talent_t improved_demonic_tactics;
-    player_talent_t demonic_brutality; // TOCHECK: Pets may not be properly benefitting from this in-game
+    player_talent_t demonic_brutality;
 
     player_talent_t pact_of_the_eredruin;
     const spell_data_t* doomguard;
@@ -363,6 +369,8 @@ public:
     const spell_data_t* fiendish_wrath_buff;
     const spell_data_t* fiendish_wrath_dmg; // TODO: Multiplier fixes for this
     const spell_data_t* fel_explosion;
+
+    player_talent_t master_summoner;
 
     // Destruction
     player_talent_t conflagrate; // Base 2 charges
@@ -399,6 +407,7 @@ public:
     player_talent_t channel_demonfire;
     const spell_data_t* channel_demonfire_tick;
     const spell_data_t* channel_demonfire_travel; // Only holds travel speed
+    player_talent_t demonfire_infusion;
 
     player_talent_t blistering_atrophy;
     player_talent_t conflagration_of_chaos; // Conflagrate/Shadowburn has chance to make next cast of it a guaranteed crit TODO: Review behavior
@@ -444,7 +453,7 @@ public:
     player_talent_t master_ritualist; // Reduces proc cost of Ritual of Ruin
     player_talent_t power_overwhelming; // Stacking mastery buff for spending Soul Shards
     const spell_data_t* power_overwhelming_buff;
-    player_talent_t diabolic_embers; // Incinerate generates more Soul Shards
+
     player_talent_t dimensional_rift;
     const spell_data_t* shadowy_tear_summon; // This only creates the "pet"
     const spell_data_t* shadow_barrage; // Casts Rift version of Shadow Bolt on ticks
@@ -454,6 +463,7 @@ public:
     const spell_data_t* chaos_barrage_tick;
     const spell_data_t* chaos_tear_summon; // This only creates the "pet"
     const spell_data_t* rift_chaos_bolt; // Separate ID from Warlock's Chaos Bolt
+    player_talent_t dimension_ripper; // TODO: implement the correct proc behavior based on the spell data
 
     player_talent_t decimation; // Crits can proc Soul Fire cooldown reset. Proc chance is not in spell data
     const spell_data_t* decimation_buff;
@@ -462,7 +472,7 @@ public:
     const spell_data_t* summon_overfiend;
     const spell_data_t* overfiend_buff; // Buff on Warlock while Overfiend is out, generates Soul Shards
     const spell_data_t* overfiend_cb; // Chaos Bolt cast by Overfiend
-    player_talent_t dimension_ripper;
+    player_talent_t diabolic_embers; // Incinerate generates more Soul Shards
     player_talent_t unstable_rifts;
     const spell_data_t* dimensional_cinder;
   } talents;
@@ -497,7 +507,7 @@ public:
     player_talent_t cruelty_of_kerxan;
     player_talent_t infernal_machine;
 
-    player_talent_t flames_of_xoroth; // TODO: 2024-07-25 Flames of Xoroth spell data has unexpected labels for effects 3 and 4, may be causing unintended values in game
+    player_talent_t flames_of_xoroth;
     player_talent_t abyssal_dominion;
     const spell_data_t* abyssal_dominion_buff;
     const spell_data_t* infernal_fragmentation; // TODO: Re-check damage of Infernal Fragments
@@ -515,11 +525,11 @@ public:
     const spell_data_t* wither_direct; // TODO: Damage values are picking up some other weird effects similar to Flames of Xoroth. Check damage again after main implementation work is done
     const spell_data_t* wither_dot; // TODO: In-game, Affliction is picking up the Socrethar's Guile effect, which is almost certainly a bug
 
-    player_talent_t xalans_ferocity; // TODO: This has similar issues to Flames of Xoroth. Is/should this be affecting pets?
+    player_talent_t xalans_ferocity;
     player_talent_t blackened_soul;
     const spell_data_t* blackened_soul_trigger; // Contains interval for stack collapse
     const spell_data_t* blackened_soul_dmg;
-    player_talent_t xalans_cruelty; // TODO: Same concerns as Xalan's Ferocity
+    player_talent_t xalans_cruelty;
 
     player_talent_t hatefury_rituals;
     player_talent_t bleakheart_tactics;
@@ -567,6 +577,10 @@ public:
     action_t* demonic_soul;
     action_t* shared_fate;
     action_t* wicked_reaping;
+    action_t* demonfire_infusion;
+    action_t* jackpot_ua;
+    action_t* jackpot_cdf;
+    action_t* eye_blast;  // Diabolist 2pc damage proc
   } proc_actions;
 
   struct tier_sets_t
@@ -575,16 +589,37 @@ public:
     const spell_data_t* hexflame_aff_2pc;
     const spell_data_t* hexflame_aff_4pc;
     const spell_data_t* umbral_lattice;
+    const spell_data_t* spliced_aff_2pc;
+    const spell_data_t* spliced_aff_4pc;
+    const spell_data_t* spliced_aff_jackpot;
+    const spell_data_t* jackpot_ua;
 
     // Demonology
     const spell_data_t* hexflame_demo_2pc;
     const spell_data_t* hexflame_demo_4pc;
     const spell_data_t* empowered_legion_strike;
+    const spell_data_t* spliced_demo_2pc;
+    const spell_data_t* spliced_demo_4pc;
+    const spell_data_t* greater_dreadstalker;
+    const spell_data_t* demonic_hunger; // Applied to Dreadstalker when empowered by Jackpot
 
     // Destruction
     const spell_data_t* hexflame_destro_2pc;
     const spell_data_t* hexflame_destro_4pc;
     const spell_data_t* echo_of_the_azjaqir;
+    const spell_data_t* spliced_destro_2pc;
+    const spell_data_t* spliced_destro_4pc;
+    const spell_data_t* spliced_destro_jackpot;
+    const spell_data_t* demonfire_flurry; // Procs Demonfire bolts on Jackpot proc
+
+    // Soul Harvester
+    const spell_data_t* rampaging_demonic_soul;
+
+    // Diabolist
+    const spell_data_t* demonic_oculus;        // TWW3 Diabolist 2pc stacking buff
+    const spell_data_t* eye_blast;             // TWW3 Diablist 2pc damage proc
+    const spell_data_t* demonic_intelligence;  // TWW3 Diabolist 4pc stacking buff
+
   } tier;
 
   // Cooldowns - Used for accessing cooldowns outside of their respective actions, such as reductions/resets
@@ -609,12 +644,13 @@ public:
 
     // Affliction Buffs
     propagate_const<buff_t*> nightfall;
-    propagate_const<buff_t*> soul_rot; // Buff for determining if Drain Life is zero cost and aoe.
+    propagate_const<buff_t*> soul_rot; // Buff for determining if Drain Life is zero cost and aoe. TODO: After 11.1 goes live, remove old AoE Drain Life code
     propagate_const<buff_t*> tormented_crescendo;
     propagate_const<buff_t*> malign_omen;
     propagate_const<buff_t*> dark_harvest_haste; // One buff in game...
     propagate_const<buff_t*> dark_harvest_crit; // ...but split into two in simc for better handling
     propagate_const<buff_t*> umbral_lattice; // TWW1 4pc
+    propagate_const<buff_t*> jackpot_affliction;
 
     // Demonology Buffs
     propagate_const<buff_t*> demonic_core;
@@ -644,6 +680,8 @@ public:
     propagate_const<buff_t*> decimation;
     propagate_const<buff_t*> summon_overfiend;
     propagate_const<buff_t*> echo_of_the_azjaqir;
+    propagate_const<buff_t*> demonfire_flurry_trigger;
+    propagate_const<buff_t*> jackpot_destruction;
 
     // Diabolist Buffs
     propagate_const<buff_t*> ritual_overlord;
@@ -655,9 +693,12 @@ public:
     propagate_const<buff_t*> infernal_bolt;
     propagate_const<buff_t*> abyssal_dominion;
     propagate_const<buff_t*> ruination;
+    propagate_const<buff_t*> demonic_oculus;        // TWW3 Diabolist 2pc buff
+    propagate_const<buff_t*> demonic_intelligence;  // TWW3 Diabolist 4pc buff
 
     // Hellcaller Buffs
     propagate_const<buff_t*> malevolence;
+    propagate_const<buff_t*> maintained_withering; // TWW3 Hellcaller 4pc buff
 
     // Soul Harvester Buffs
     propagate_const<buff_t*> succulent_soul;
@@ -694,6 +735,7 @@ public:
     // Soul Harvester
     gain_t* feast_of_souls;
     gain_t* shadow_of_death;
+    gain_t* rampaging_demonic_soul; // Only with TWW3 4pc
   } gains;
 
   // Procs
@@ -711,6 +753,7 @@ public:
     proc_t* tormented_crescendo;
     proc_t* ravenous_afflictions;
     proc_t* umbral_lattice;
+    proc_t* jackpot_affliction;
 
     // Demonology
     proc_t* demonic_calling;
@@ -723,8 +766,11 @@ public:
     proc_t* spiteful_reconstitution;
     proc_t* umbral_blaze;
     proc_t* pact_of_the_imp_mother;
+    proc_t* doom_eternal;
     proc_t* pact_of_the_eredruin;
     proc_t* empowered_legion_strike; // TWW1 4pc buff
+    proc_t* jackpot_demonology; // TWW2 2pc proc
+    proc_t* demonic_core_big_dogs;
 
     // Destruction
     proc_t* reverse_entropy;
@@ -734,9 +780,12 @@ public:
     proc_t* mayhem;
     proc_t* conflagration_of_chaos_cf;
     proc_t* conflagration_of_chaos_sb;
+    proc_t* demonfire_infusion_inc;
+    proc_t* demonfire_infusion_dot;
     proc_t* decimation;
     proc_t* dimension_ripper;
     proc_t* echo_of_the_azjaqir;
+    proc_t* jackpot_destruction;
 
     // Diabolist
 
@@ -775,7 +824,7 @@ public:
 
     // Destruction
     rng_setting_t decimation = { 0.10, 0.10, "decimation" };
-    rng_setting_t dimension_ripper = { 0.05, 0.05, "dimension_ripper" };
+    rng_setting_t dimension_ripper = { 0.0225, 0.0225, "dimension_ripper" };
 
     // Diabolist
 
@@ -797,6 +846,9 @@ public:
   bool normalize_destruction_mastery;
   shuffled_rng_t* rain_of_chaos_rng;
   real_ppm_t* ravenous_afflictions_rng;
+  real_ppm_t* jackpot_demonology_rng;
+  real_ppm_t* jackpot_destruction_rng;
+  const spell_data_t* version_11_1_0_data;
 
   warlock_t( sim_t* sim, util::string_view name, race_e r );
 
@@ -808,6 +860,10 @@ public:
   void init_procs() override;
   void init_rng() override;
   void init_action_list() override;
+  std::vector<std::string> action_names_from_spell_id( unsigned int spell_id ) const override;
+  std::string aura_expr_from_spell_id( unsigned int spell_id, bool on_self = true ) const override;
+  parsed_assisted_combat_rule_t parse_assisted_combat_rule( const assisted_combat_rule_data_t& rule,
+                                                            const assisted_combat_step_data_t& step ) const override;
   void init_resources( bool force ) override;
   void init_special_effects() override;
   void reset() override;
@@ -841,7 +897,10 @@ public:
   void invalidate_cache( cache_e ) override;
   double composite_spell_crit_chance() const override;
   double composite_melee_crit_chance() const override;
+  double composite_player_critical_damage_multiplier( const action_state_t* ) const override;
+  double composite_mastery() const override;
   double composite_rating_multiplier( rating_e ) const override;
+  void init_blizzard_action_list() override;
   void combat_begin() override;
   void init_assessors() override;
   std::unique_ptr<expr_t> create_expression( util::string_view name_str ) override;
@@ -943,5 +1002,8 @@ namespace helpers
 
   void trigger_blackened_soul( warlock_t* p, bool malevolence );
 
+  void trigger_jackpot_ua( warlock_t* p );
+
+  void set_shared_fate_tick_factor( warlock_t* p, double f );
 }
 }  // namespace warlock

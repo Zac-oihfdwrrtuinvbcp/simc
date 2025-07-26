@@ -347,6 +347,8 @@ action_t::action_t( action_e ty, util::string_view token, player_t* p, const spe
     aoe(),
     dual(),
     callbacks( true ),
+    caster_callbacks( true ),
+    target_callbacks( true ),
     suppress_caster_procs(),
     suppress_target_procs(),
     enable_proc_from_suppressed(),
@@ -360,6 +362,8 @@ action_t::action_t( action_e ty, util::string_view token, player_t* p, const spe
     use_off_gcd(),
     use_while_casting(),
     usable_while_casting(),
+    can_have_one_button_penalty(),
+    cooldown_allow_casting_success( true ),
     interrupt_auto_attack( true ),
     reset_auto_attack(),
     ignore_false_positive(),
@@ -560,6 +564,8 @@ action_t::action_t( action_e ty, util::string_view token, player_t* p, const spe
   add_option( opt_bool( "interrupt_immediate", option.interrupt_immediate ) );
   add_option( opt_bool( "use_off_gcd", use_off_gcd ) );
   add_option( opt_bool( "use_while_casting", use_while_casting ) );
+  add_option( opt_string( "can_have_one_button_penalty", option.can_have_one_button_penalty_str ) );
+  add_option( opt_string( "cooldown_allow_casting_success", option.cooldown_allow_casting_success_str ) );
 }
 
 action_t::~action_t()
@@ -608,11 +614,7 @@ bool action_t::has_periodic_damage_effect( const spell_data_t& spell )
  */
 void action_t::parse_spell_data( const spell_data_t& spell_data )
 {
-  if ( !spell_data.ok() )
-  {
-    sim->errorf( "%s %s: parse_spell_data: no spell to parse.\n", player->name(), name() );
-    return;
-  }
+  assert( spell_data.ok() && "parse_spell_data: no spell to parse" );
 
   id                = spell_data.id();
   base_execute_time = spell_data.cast_time();
@@ -621,6 +623,10 @@ void action_t::parse_spell_data( const spell_data_t& spell_data )
   min_travel_time   = spell_data.missile_min_duration();
   trigger_gcd       = spell_data.gcd();
   school            = spell_data.get_school_type();
+
+  // generic (type==none) and spells (type==magic) have hasted gcd by default
+  if ( spell_data.dmg_class() == SPELL_TYPE_NONE || spell_data.dmg_class() == SPELL_TYPE_MAGIC )
+    gcd_type = gcd_haste_type::SPELL_CAST_SPEED;
 
   // parse attributes
   suppress_caster_procs       = spell_data.flags( spell_attribute::SX_SUPPRESS_CASTER_PROCS );
@@ -975,6 +981,26 @@ void action_t::parse_options( util::string_view options_str )
       } );
 
     parse_target_str();
+
+    auto parse_bool = [ this ]( bool& b, std::string_view n, std::string_view v )
+    {
+      if ( v.empty() )
+        return;
+
+      if ( v != "0" && v != "1" )
+      {
+        throw std::invalid_argument( fmt::format( "Acceptable '{}' option '{}' values are '1' or '0' for {}",
+                                                  this->name(), n, player->name() ) );
+      }
+
+      if ( v == "0" )
+        b = false;
+      else
+        b = true;
+    };
+
+    parse_bool( can_have_one_button_penalty,    "can_have_one_button_penalty",    option.can_have_one_button_penalty_str );
+    parse_bool( cooldown_allow_casting_success, "cooldown_allow_casting_success", option.cooldown_allow_casting_success_str );
   }
   catch ( const std::exception& e )
   {
@@ -1209,11 +1235,23 @@ timespan_t action_t::gcd() const
     gcd_ = min_gcd;
   }
 
+  if ( gcd_ != timespan_t::zero() && player->is_player() &&
+       player->thewarwithin_opts.additional_gcd_time > timespan_t::zero() )
+  {
+    gcd_ += player->thewarwithin_opts.additional_gcd_time;
+  }
+
+  // TODO: Figure out how this works for spells with cast times.
+  if ( gcd_ != timespan_t::zero() && player->is_player() && player->one_button_mode && can_have_one_button_penalty )
+    gcd_ *= 1.0 + player->single_button_assistant->effectN( 1 ).percent();
+
   return gcd_;
 }
 
 timespan_t action_t::cooldown_duration() const
-{ return cooldown ? cooldown->duration : timespan_t::zero(); }
+{
+  return cooldown ? cooldown->cooldown_duration( cooldown ) : timespan_t::zero();
+}
 
 /** False Positive skill chance, executes command regardless of expression. */
 double action_t::false_positive_pct() const
@@ -1846,7 +1884,7 @@ void action_t::execute()
       execute_action->execute();
     }
 
-    if ( callbacks )
+    if ( callbacks && caster_callbacks )
     {
       // Proc generic abilities on execute.
       proc_types pt;
@@ -2182,6 +2220,25 @@ void action_t::schedule_execute( action_state_t* state )
       player->schedule_cwc_ready( timespan_t::zero() );
     }
 
+    if ( player->enable_spell_queue && time_to_execute > player->spell_queue_window )
+    {
+      if ( player->spell_queue_event )
+        event_t::cancel( player->spell_queue_event );
+
+      player->spell_queue_event = make_event( *sim, time_to_execute - player->spell_queue_window, [ this ]
+      {
+        if ( player->executing != this )
+        {
+          player->spell_queue_event = nullptr;
+          return;
+        }
+
+        player->visited_apls_ = 0;  // Reset visited apl list
+        player->spell_queued_action = player->select_action( *player->active_action_list, execute_type::FOREGROUND );
+        player->spell_queue_event = nullptr;
+      } );
+    }
+
     // While an ability is casting, the auto_attack is paused
     // So we simply reschedule the auto_attack by the ability's cast time
     if ( special && time_to_execute > timespan_t::zero() && !proc && ( interrupt_auto_attack || reset_auto_attack ) )
@@ -2316,12 +2373,19 @@ bool action_t::select_target()
 {
   if ( target_if_mode != TARGET_IF_NONE )
   {
+    // Reset target for cases where we desire to check player target (priority target, highest health pull mob etc.)
+    // first in first mode or fall back to it in min or max mode if no other target is preferred.
+    player_t* action_target = target;
+    target = target->is_enemy() ? player->target : player;
+    if ( action_target != target )
+      sim->print_debug( "{} reset action target to player target for {}; player target: {} - action target: {}", *player, *this, *target, *action_target );
+
     player_t* potential_target = select_target_if_target();
     if ( potential_target )
     {
       // If the target changes, we need to regenerate the target cache to get the new primary target
       // as the first element of target_list. Only do this for abilities that are aoe.
-      if ( is_aoe() && potential_target != target )
+      if ( is_aoe() && ( potential_target != target || action_target != potential_target ) )
       {
         target_cache.is_valid = false;
       }
@@ -2334,7 +2398,12 @@ bool action_t::select_target()
       target = potential_target;
     }
     else
+    {
+      if ( is_aoe() && target != action_target )
+        target_cache.is_valid = false;
+
       return false;
+    }
   }
 
   if ( option.cycle_targets && sim->target_non_sleeping_list.size() > 1 )
@@ -2487,7 +2556,21 @@ bool action_t::action_ready()
   if ( if_expr && !if_expr->success() )
     return false;
 
+  if ( !cooldown_allow_casting_success && ( ( player->last_foreground_action
+    && player->last_foreground_action->internal_id == internal_id
+    && player->last_foreground_action->time_to_execute > 0_ms )
+    || ( player->executing && player->executing->internal_id == internal_id ) ) )
+  {
+    return false;
+  }
+
   return true;
+}
+
+bool action_t::cost_affordable()
+{
+  auto resource = current_resource();
+  return resource == RESOURCE_NONE || player->resource_available( resource, cost() );
 }
 
 // Properties that govern if the spell itself is executable, without considering any kind of user
@@ -2504,8 +2587,7 @@ bool action_t::ready()
   if ( player->is_moving() && !usable_moving() )
     return false;
 
-  auto resource = current_resource();
-  if ( resource != RESOURCE_NONE && !player->resource_available( resource, cost() ) )
+  if ( !cost_affordable() )
   {
     if ( starved_proc )
       starved_proc->occur();
@@ -3113,6 +3195,9 @@ std::unique_ptr<expr_t> action_t::create_expression( std::string_view name )
   if ( name == "cost" )
     return make_mem_fn_expr( name, *this, &action_t::cost );
 
+  if ( name == "cost_affordable" )
+    return make_mem_fn_expr( name, *this, &action_t::cost_affordable );
+
   if ( name == "target" )
     return make_fn_expr( name, [this] { return target->actor_index; } );
 
@@ -3124,6 +3209,9 @@ std::unique_ptr<expr_t> action_t::create_expression( std::string_view name )
 
   if ( name == "travel_time" )
     return make_mem_fn_expr( name, *this, &action_t::travel_time );
+
+  if ( name == "available_targets" )
+    return make_fn_expr( name, [ this ] { return target_list().size(); } );
 
   if ( name == "usable_in" )
   {
@@ -3307,6 +3395,16 @@ std::unique_ptr<expr_t> action_t::create_expression( std::string_view name )
       double evaluate() override
       {
         state->target = action.target;
+
+        int num_targets = action.n_targets();
+        if ( num_targets == -1 || num_targets > 1 )
+        {
+          action.target_cache.is_valid = false;
+          int max_targets = as<int>( action.target_list().size() );
+          num_targets = ( num_targets < 0 ) ? max_targets : std::min( max_targets, num_targets );
+        }
+        state->n_targets = std::max( 1, num_targets );
+
         action.snapshot_state( state, result_amount_type::NONE );
 
         return action.composite_persistent_multiplier( state );
@@ -3908,20 +4006,23 @@ std::unique_ptr<expr_t> action_t::create_expression( std::string_view name )
     return std::make_unique<target_proxy_expr_t>( *this, tail );
   }
 
-  if ( ( splits.size() == 3 && splits[ 0 ] == "action" ) || splits[ 0 ] == "in_flight" ||
-       splits[ 0 ] == "in_flight_to_target" || splits[ 0 ] == "in_flight_remains" || splits[ 0 ] == "in_flight_to_target_count" )
+  auto is_in_flight_expr_name = [] ( std::string_view str ) {
+    return str == "in_flight" || str == "in_flight_count" || str == "in_flight_to_target" ||
+           str == "in_flight_remains" || str == "in_flight_to_target_count";
+  };
+
+  if ( ( splits.size() == 3 && splits[ 0 ] == "action" ) || is_in_flight_expr_name( splits[ 0 ] ) )
   {
     std::vector<action_t*> in_flight_list;
-    bool in_flight_singleton = ( splits[ 0 ] == "in_flight" || splits[ 0 ] == "in_flight_to_target" ||
-                                 splits[ 0 ] == "in_flight_remains" || splits[ 0 ] == "in_flight_to_target_count" );
-    auto action_name  = ( in_flight_singleton ) ? name_str : splits[ 1 ];
+    bool in_flight_singleton = is_in_flight_expr_name( splits[ 0 ] );
+    auto action_name = in_flight_singleton ? name_str : splits[ 1 ];
+    bool is_in_flight_expr = in_flight_singleton || is_in_flight_expr_name( splits[ 2 ] );
     for ( size_t i = 0; i < player->action_list.size(); ++i )
     {
       action_t* action = player->action_list[ i ];
       if ( action->name_str == action_name )
       {
-        if ( in_flight_singleton || splits[ 2 ] == "in_flight" ||
-          splits[ 2 ] == "in_flight_to_target" || splits[ 2 ] == "in_flight_remains" )
+        if ( is_in_flight_expr )
         {
           in_flight_list.push_back( action );
         }
@@ -3931,6 +4032,7 @@ std::unique_ptr<expr_t> action_t::create_expression( std::string_view name )
         }
       }
     }
+
     if ( !in_flight_list.empty() )
     {
       if ( splits[ 0 ] == "in_flight" || ( !in_flight_singleton && splits[ 2 ] == "in_flight" ) )
@@ -3951,6 +4053,20 @@ std::unique_ptr<expr_t> action_t::create_expression( std::string_view name )
           }
         };
         return std::make_unique<in_flight_multi_expr_t>( std::move(in_flight_list) );
+      }
+      else if ( splits[ 0 ] == "in_flight_count" || ( !in_flight_singleton && splits[ 2 ] == "in_flight_count" ) )
+      {
+        struct in_flight_count_multi_expr_t : public expr_t
+        {
+          const std::vector<action_t*> action_list;
+          in_flight_count_multi_expr_t( std::vector<action_t*> al ) : expr_t( "in_flight_count" ), action_list( std::move( al ) )
+          { }
+          double evaluate() override
+          { return 1.0 * range::accumulate( action_list, 0, [] ( const auto* a ) { return a->num_travel_events(); } ); }
+          bool is_constant() override
+          { return action_list.empty(); }
+        };
+        return std::make_unique<in_flight_count_multi_expr_t>( std::move( in_flight_list ) );
       }
       else if ( splits[ 0 ] == "in_flight_to_target" ||
                 ( !in_flight_singleton && splits[ 2 ] == "in_flight_to_target" ) )
@@ -4154,10 +4270,7 @@ void action_t::snapshot_internal( action_state_t* state, unsigned flags, result_
     state->persistent_multiplier = composite_persistent_multiplier( state );
 
   if ( flags & STATE_MUL_PET )
-  {
-    state->pet_multiplier =
-      player->cast_pet()->owner->composite_player_pet_damage_multiplier( state, player->type == PLAYER_GUARDIAN );
-  }
+    state->pet_multiplier = player->cast_pet()->composite_owner_pet_damage_multiplier( state );
 
   if ( flags & STATE_TGT_MUL_DA )
     state->target_da_multiplier = composite_target_da_multiplier( state->target );
@@ -4166,10 +4279,7 @@ void action_t::snapshot_internal( action_state_t* state, unsigned flags, result_
     state->target_ta_multiplier = composite_target_ta_multiplier( state->target );
 
   if ( flags & STATE_TGT_MUL_PET )
-  {
-    state->target_pet_multiplier = player->cast_pet()->owner->composite_player_target_pet_damage_multiplier(
-      state->target, player->type == PLAYER_GUARDIAN );
-  }
+    state->target_pet_multiplier = player->cast_pet()->composite_owner_pet_target_damage_multiplier( state->target );
 
   if ( flags & STATE_TGT_CRIT )
     state->target_crit_chance = composite_target_crit_chance( state->target ) * composite_crit_chance_multiplier();
@@ -4933,9 +5043,9 @@ player_t* action_t::get_expression_target()
   return ( target == player ) ? player->target : target;
 }
 
-void action_t::gain_energize_resource( resource_e resource_type, double amount, gain_t* g )
+double action_t::gain_energize_resource( resource_e resource_type, double amount, gain_t* g )
 {
-  player->resource_gain( resource_type, amount, g, this );
+  return player->resource_gain( resource_type, amount, g, this );
 }
 
 bool action_t::usable_during_current_cast() const
@@ -5157,19 +5267,14 @@ player_t* action_t::select_target_if_target()
   }
 
   player_t* original_target = target;
-  player_t* proposed_target = target;
-  double current_target_v = target_if_expr->evaluate();
-
-  double max_ = current_target_v;
-  double min_ = current_target_v;
+  player_t* proposed_target = nullptr;
+    
+  double max_ = -std::numeric_limits<double>::infinity();
+  double min_ = std::numeric_limits<double>::infinity();
 
   for ( auto p : master_list )
   {
     target = p;
-
-    // No need to check current target
-    if ( target == original_target )
-      continue;
 
     if ( !target_ready( target ) )
     {
@@ -5178,14 +5283,8 @@ player_t* action_t::select_target_if_target()
 
     double v = target_if_expr->evaluate();
 
-    // Don't swap to targets that evaluate to identical value than the current
-    // target
-    if ( v == current_target_v )
-      continue;
-
     if ( target_if_mode == TARGET_IF_FIRST && v != 0 )
     {
-      current_target_v = v;
       proposed_target = target;
       break;
     }
@@ -5206,7 +5305,7 @@ player_t* action_t::select_target_if_target()
 
   // If "first available target" did not find anything useful, don't execute the
   // action
-  if (target_if_mode == TARGET_IF_FIRST && current_target_v == 0)
+  if ( !proposed_target )
   {
     sim->print_debug( "{} target_if no target found for {}", *player, signature_str );
 
@@ -5550,6 +5649,17 @@ void action_t::apply_affecting_effect( const spelleffect_data_t& effect, const s
         }
         break;
 
+      case P_TICK_TIME:
+        base_tick_time += effect.time_value();
+        sim->print_debug( "{} base tick time modified by {} to {}", *this, effect.time_value(), base_tick_time );
+        value_ = effect.base_value();
+        if ( base_tick_time < 0_ms )
+        {
+          sim->print_debug( "WARNING: base tick time below 0ms!" );
+          base_tick_time = 0_ms;
+        }
+        break;
+
       default:
         break;
     }
@@ -5704,8 +5814,20 @@ void action_t::apply_affecting_effect( const spelleffect_data_t& effect, const s
     switch ( effect.subtype() )
     {
       case A_HASTED_GCD:
-        gcd_type = gcd_haste_type::ATTACK_HASTE;
-        sim->print_debug( "{} gcd type set to attack_haste", *this );
+        switch ( data().dmg_class() )
+        {
+          case SPELL_TYPE_NONE:
+          case SPELL_TYPE_MAGIC:
+            gcd_type = gcd_haste_type::SPELL_CAST_SPEED;
+            sim->print_debug( "{} gcd type set to spell_cast_speed", *this );
+            break;
+          case SPELL_TYPE_MELEE:
+          case SPELL_TYPE_RANGED:
+            gcd_type = gcd_haste_type::ATTACK_HASTE;
+            sim->print_debug( "{} gcd type set to attack_haste", *this );
+            break;
+          default: break;
+        }
         value_ = 1;
         break;
 

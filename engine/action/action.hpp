@@ -187,7 +187,9 @@ public:
   bool dual;
 
   /// enables/disables proc callback system on the action, like trinkets, enchants, rppm. this supercedes all dbc-parsed flags.
-  bool callbacks;
+  /// * damage done callbacks require both ( callbacks == true && caster_callbacks == true )
+  /// * damage taken callbacks require both ( callbacks == true && target_callbacks == true )
+  bool callbacks, caster_callbacks, target_callbacks;
 
   /// if true, does not trigger callbacks on caster/target.
   bool suppress_caster_procs, suppress_target_procs;
@@ -242,6 +244,12 @@ public:
 
   /// True if ability is usable while casting another spell
   bool usable_while_casting;
+
+  /// True if the action should receive the one button GCD penalty.
+  bool can_have_one_button_penalty;
+
+  /// True if the action can be queued while it is already casting.
+  bool cooldown_allow_casting_success;
 
   /// False if channeled action does not reschedule autoattacks, used on abilities such as bladestorm.
   bool interrupt_auto_attack;
@@ -604,6 +612,8 @@ public:
     std::string cancel_if_expr_str;
     std::string sync_str;
     std::string target_str;
+    std::string can_have_one_button_penalty_str;
+    std::string cooldown_allow_casting_success_str;
     options_t();
   } option;
 
@@ -1105,6 +1115,8 @@ public:
 
   virtual void update_ready(timespan_t cd_duration = timespan_t::min());
 
+  /// Does the actor have enough of the current resource to use action
+  virtual bool cost_affordable();
   /// Is the _ability_ ready based on spell characteristics
   virtual bool ready();
   /// Is the action ready, as a combination of ability characteristics and user input? Main
@@ -1178,7 +1190,7 @@ public:
 
   virtual player_t* get_expression_target();
 
-  virtual void gain_energize_resource( resource_e resource_type, double amount, gain_t* g );
+  virtual double gain_energize_resource( resource_e resource_type, double amount, gain_t* g );
 
   virtual void html_customsection( report::sc_html_stream& );
 

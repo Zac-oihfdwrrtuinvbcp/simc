@@ -177,7 +177,6 @@ struct self_damage_t : residual_type
 
   self_damage_t( derived_actor_t *player, stagger_impl::stagger_effect_t<derived_actor_t> *stagger_effect );
 
-  proc_types proc_type() const override;
   void impact( action_state_t *state ) override;                                  // add to pool
   void assess_damage( result_amount_type type, action_state_t *state ) override;  // tick from pool
   void last_tick( dot_t *dot ) override;                                          // callback on last tick
@@ -252,7 +251,7 @@ struct stagger_t : base_actor_t
       if ( splits.size() != 2 || splits[ 0 ] != stagger_effect.name() )
         continue;
       for ( const auto &level : stagger_effect.levels )
-        if ( splits[ 1 ] == level.name() )
+        if ( splits[ 1 ] == util::tokenize_fn( level.name() ) )
           return make_fn_expr( name_str, [ &stagger_effect = stagger_effect, &level = level ] {
             return stagger_effect.current->level_data == level.level_data;
           } );
@@ -689,12 +688,8 @@ self_damage_t<derived_actor_t, residual_type>::self_damage_t(
   // to verify if base_type is of type residual_periodic_action_t<...> we'd need some extra machinery, so we won't check
   residual_type::target      = player;
   residual_type::stats->type = stats_e::STATS_NEUTRAL;
-}
 
-template <class derived_actor_t, class residual_type>
-proc_types self_damage_t<derived_actor_t, residual_type>::proc_type() const
-{
-  return PROC1_ANY_DAMAGE_TAKEN;
+  residual_type::suppress_caster_procs = false;
 }
 
 template <class derived_actor_t, class residual_type>

@@ -3338,80 +3338,18 @@ void racial::touch_of_the_grave( special_effect_t& effect )
   new dbc_proc_callback_t( effect.player, effect );
 }
 
-struct entropic_embrace_damage_t : public spell_t
-{
-  entropic_embrace_damage_t( const special_effect_t& effect ) :
-    spell_t( "entropic_embrace", effect.player, effect.player -> find_spell( 259756 ) )
-  {
-    background = true;
-    may_miss = callbacks = false;
-  }
-
-  void init() override
-  {
-    spell_t::init();
-
-    snapshot_flags = update_flags = STATE_TGT_MUL_DA | STATE_TGT_MUL_TA;
-  }
-};
-
-struct entropic_embrace_damage_cb_t : public dbc_proc_callback_t
-{
-  double coeff;
-  entropic_embrace_damage_cb_t( const special_effect_t* effect, double c )
-    : dbc_proc_callback_t( effect->player, *effect ), coeff( c )
-  {}
-
-  void trigger( action_t* a, action_state_t* state ) override
-  {
-    if ( state->result_amount <= 0 )
-    {
-      return;
-    }
-
-    dbc_proc_callback_t::trigger( a, state );
-  }
-
-  void execute( action_t* /* a */, action_state_t* state ) override
-  {
-    proc_action->base_dd_min = state->result_amount * coeff;
-    proc_action->base_dd_max = proc_action->base_dd_min;
-
-    proc_action->set_target( state->target );
-    proc_action->execute();
-  }
-};
-
 void racial::entropic_embrace( special_effect_t& effect )
 {
-  special_effect_t* effect_driver = new special_effect_t( effect.player );
-  effect_driver->source = SPECIAL_EFFECT_SOURCE_RACE;
-  effect_driver->type = SPECIAL_EFFECT_EQUIP;
-  // TODO: healing proc NYI
-  effect_driver->proc_flags_ = effect.trigger()->proc_flags() & ~( PF_NONE_HEAL | PF_MAGIC_HEAL | PF_HELPFUL_PERIODIC );
-  effect_driver->proc_flags2_ = PF2_ALL_HIT;
-  effect_driver->name_str = "entropic_embrace_damage_driver";
-  effect_driver->spell_id = effect.trigger()->id();
-  effect_driver->execute_action = create_proc_action<entropic_embrace_damage_t>( "entropic_embrace", effect );
-  effect.player->special_effects.push_back( effect_driver );
-
-  auto proc = new entropic_embrace_damage_cb_t( effect_driver, effect.trigger()->effectN( 1 ).percent() );
-  proc->deactivate();
-
   buff_t* base_buff = buff_t::find( effect.player, "entropic_embrace" );
   if ( base_buff == nullptr )
   {
     base_buff = make_buff( effect.player, "entropic_embrace", effect.trigger() )
-      ->set_stack_change_callback( [ proc ]( buff_t*, int, int new_ ) {
-        if ( new_ > 0 )
-          proc->activate();
-        else
-          proc->deactivate();
-      } );
+      ->add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER )
+      ->add_invalidate( CACHE_PLAYER_HEAL_MULTIPLIER );
+    effect.player->buffs.entropic_embrace = base_buff;
   }
 
   effect.custom_buff = base_buff;
-
   new dbc_proc_callback_t( effect.player, effect );
 }
 
@@ -4386,7 +4324,7 @@ struct item_has_use_expr_t : public item_effect_expr_t
   {
     for ( auto e : effects )
     {
-      if ( e->cooldown() != 0_ms && e->rppm() == 0 )  // Technically, rppm doesn't have a cooldown.
+      if ( e->type == SPECIAL_EFFECT_USE )
       {
         has_use = true;
         break;
@@ -4502,6 +4440,28 @@ struct item_has_use_expr_t : public item_effect_expr_t
   double evaluate() override
   {
     return v;
+  }
+};
+
+struct item_cooldown_category_expr_t : public item_effect_base_expr_t
+{
+  item_cooldown_category_expr_t( player_t& player, const std::vector<slot_e>& slots,
+                                 util::string_view full_expression )
+    : item_effect_base_expr_t( player, slots, full_expression )
+  {
+  }
+
+  bool is_constant() override
+  {
+    return true;
+  }
+
+  double evaluate() override
+  {
+    for ( auto effect : effects )
+      if ( auto cd_group = effect->cooldown_group(); cd_group )
+        return cd_group;
+    return 0.0;
   }
 };
 
@@ -4708,6 +4668,9 @@ std::unique_ptr<expr_t> unique_gear::create_expression( player_t& player, util::
     return std::make_unique<item_ready_expr_t>( player, slots, name_str );
   }
 
+  if ( util::str_compare_ci (splits[ ptype_idx ], "cooldown_category" ) )
+    return std::make_unique<item_cooldown_category_expr_t>( player, slots, name_str );
+
   throw std::invalid_argument( fmt::format( "Unsupported unique gear expression '{}'.", splits.back() ) );
 }
 
@@ -4772,6 +4735,20 @@ void proc_attack_t::override_data(const special_effect_t& e)
 
 } // unique_gear
 
+wrapper_callback_t::wrapper_callback_t( custom_cb_t cb_, wowv_t min_, wowv_t max_ )
+  : scoped_callback_t(), cb( std::move( cb_ ) ), min_build( min_ ), max_build( max_ )
+{}
+
+bool wrapper_callback_t::valid( const special_effect_t& effect ) const
+{
+  return effect.player->dbc->wowv() >= min_build && effect.player->dbc->wowv() < max_build;
+}
+
+void wrapper_callback_t::initialize( special_effect_t& effect )
+{
+  cb( effect );
+}
+
 static unique_gear::special_effect_set_t do_find_special_effect_db_item(
     const std::vector<special_effect_db_item_t>& db, unsigned spell_id )
 {
@@ -4823,21 +4800,22 @@ void unique_gear::add_effect( const special_effect_db_item_t& dbitem )
     __fallback_effect_db.push_back( dbitem );
 }
 
-void unique_gear::register_special_effect( unsigned spell_id, custom_cb_t init_callback, bool fallback )
+void unique_gear::register_special_effect( unsigned spell_id, custom_cb_t init_callback, bool fallback,
+                                           wowv_t min_build, wowv_t max_build )
 {
   special_effect_db_item_t dbitem;
   dbitem.spell_id = spell_id;
-  dbitem.cb_obj = new wrapper_callback_t( std::move(init_callback) );
+  dbitem.cb_obj = new wrapper_callback_t( std::move( init_callback ), min_build, max_build );
   dbitem.fallback = fallback;
 
   add_effect( dbitem );
 }
 
 void unique_gear::register_special_effect( std::initializer_list<unsigned> spell_ids, custom_cb_t init_callback,
-                                           bool fallback )
+                                           bool fallback, wowv_t min_build, wowv_t max_build )
 {
   for ( auto id : spell_ids )
-    register_special_effect( id, init_callback, fallback );
+    register_special_effect( id, init_callback, fallback, min_build, max_build );
 }
 
 void unique_gear::register_special_effect( unsigned spell_id, const char* encoded_str )

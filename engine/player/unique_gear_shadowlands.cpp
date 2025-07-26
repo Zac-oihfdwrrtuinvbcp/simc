@@ -1927,6 +1927,17 @@ void spare_meat_hook( special_effect_t& effect )
   effect.execute_action = dot;
 }
 
+void viscera_of_coalesced_hatred( special_effect_t& effect )
+{
+  auto execute = create_proc_action<generic_proc_t>( "viscera_of_coalesced_hatred", effect, effect.driver() );
+  execute->execute_action =
+      create_proc_action<generic_proc_t>( "hateful_strike", effect, effect.driver()->effectN( 1 ).trigger() );
+  execute->execute_action->base_multiplier *= role_mult( effect.player, effect.driver()->effectN( 1 ).trigger() );
+
+  effect.execute_action = execute;
+  new dbc_proc_callback_t( effect.player, effect );
+}
+
 // 9.1 Trinkets
 
 // id=356029 buff
@@ -4186,7 +4197,7 @@ void yasahm_the_riftbreaker( special_effect_t& effect )
     preternatural_charge_t( const special_effect_t& effect )
       : proc_spell_t( "preternatural_charge", effect.player, effect.player->find_spell( 351561 ), effect.item )
     {
-      base_dd_min = base_dd_max = effect.trigger()->effectN( 1 ).average( effect.item );
+      base_dd_min = base_dd_max = effect.driver()->effectN( 1 ).average( effect );
     }
   };
 
@@ -6073,6 +6084,7 @@ void register_special_effects()
     unique_gear::register_special_effect( 348139, items::instructors_divine_bell );
     unique_gear::register_special_effect( 367896, items::instructors_divine_bell );
     unique_gear::register_special_effect( 345548, items::spare_meat_hook );
+    unique_gear::register_special_effect( 345697, items::viscera_of_coalesced_hatred );
 
     // 9.1 Trinkets
     unique_gear::register_special_effect( 353492, items::forbidden_necromantic_tome );
