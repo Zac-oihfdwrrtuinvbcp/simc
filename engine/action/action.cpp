@@ -609,6 +609,19 @@ bool action_t::has_periodic_damage_effect( const spell_data_t& spell )
   return range::any_of( spell.effects(), is_periodic_damage_effect );
 }
 
+bool action_t::does_direct_damage() const
+{
+  return has_direct_damage_effect( data() ) || base_dd_min > 0 || spell_power_mod.direct > 0 ||
+         attack_power_mod.direct > 0 || weapon_multiplier > 0;
+}
+
+bool action_t::does_periodic_damage() const
+{
+  return has_periodic_damage_effect( data() ) ||
+         ( ( base_td > 0 || spell_power_mod.tick > 0 || attack_power_mod.tick > 0 || rolling_periodic ) &&
+           dot_duration > 0_ms );
+}
+
 /**
  * Parse spell data values and write them into corresponding action_t members.
  */
@@ -697,14 +710,20 @@ void action_t::parse_spell_data( const spell_data_t& spell_data )
   {
     resource_current = spell_powers.front().resource();
   }
+  // Find the first power entry without a aura id
+  else if ( auto it = range::find( spell_powers, 0U, &spellpower_data_t::aura_id ); it != spell_powers.end() )
+  {
+    resource_current = it->resource();
+  }
+  // If all entries have an aura, find the one matching the spec aura
+  else if ( auto it = range::find( spell_powers, player->spec_spell->id(), &spellpower_data_t::aura_id );
+            it != spell_powers.end() )
+  {
+    resource_current = it->resource();
+  }
   else
   {
-    // Find the first power entry without a aura id
-    auto it = range::find( spell_powers, 0U, &spellpower_data_t::aura_id );
-    if ( it != spell_powers.end() )
-    {
-      resource_current = it->resource();
-    }
+    sim->print_debug( "{} could not determine resource for {}.", *player, *this );
   }
 
   for ( const spellpower_data_t& pd : spell_powers )
@@ -2556,10 +2575,9 @@ bool action_t::action_ready()
   if ( if_expr && !if_expr->success() )
     return false;
 
-  if ( !cooldown_allow_casting_success && ( ( player->last_foreground_action
-    && player->last_foreground_action->internal_id == internal_id
-    && player->last_foreground_action->time_to_execute > 0_ms )
-    || ( player->executing && player->executing->internal_id == internal_id ) ) )
+  if ( !cooldown_allow_casting_success &&
+       ( ( player->last_foreground_action == this && player->last_foreground_action->time_to_execute > 0_ms ) ||
+         ( player->executing == this ) ) )
   {
     return false;
   }
@@ -2677,15 +2695,12 @@ void action_t::init()
   if ( may_crit || tick_may_crit )
     snapshot_flags |= STATE_CRIT | STATE_TGT_CRIT;
 
-  if ( has_periodic_damage_effect( data() ) ||
-       ( ( base_td > 0 || spell_power_mod.tick > 0 || attack_power_mod.tick > 0 || rolling_periodic ) &&
-         dot_duration > 0_ms ) )
+  if ( does_periodic_damage() )
   {
     snapshot_flags |= STATE_MUL_TA | STATE_TGT_MUL_TA | STATE_MUL_PERSISTENT | STATE_VERSATILITY;
   }
 
-  if ( has_direct_damage_effect( data() ) || base_dd_min > 0 || spell_power_mod.direct > 0 ||
-       attack_power_mod.direct > 0 || weapon_multiplier > 0 )
+  if ( does_direct_damage() )
   {
     snapshot_flags |= STATE_MUL_DA | STATE_TGT_MUL_DA | STATE_MUL_PERSISTENT | STATE_VERSATILITY;
   }

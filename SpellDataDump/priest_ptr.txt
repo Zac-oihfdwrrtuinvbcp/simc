@@ -2983,7 +2983,9 @@ Talent Entry     : Generic [tree=class, row=3, col=2, max_rank=1, req_points=0]
 Class            : Priest
 School           : Holy
 Spell Type       : Magic
-Resource         : 0.2% Base Mana (0) (id=7897)
+Resource         : 0.4% Base Mana (0) (id=7897) w/ Discipline Priest (id=137032)[Hotfixed: Aura Id (0 -> 137032), Percent Cost (0.2 -> 0.4)]
+Resource         : 0.2% Base Mana (0) (id=311593) w/ Holy Priest (id=137031)[Hotfixed: NEW POWER]
+Resource         : 0.2% Base Mana (0) (id=311594) w/ Shadow Priest (id=137033)[Hotfixed: NEW POWER]
 Spell Level      : 31
 GCD              : 1.5 seconds
 Labels           : 16: Class Spells
@@ -3757,7 +3759,7 @@ Labels           : 16: Class Spells
 Attributes       : Passive (6), Do Not Display (Spellbook, Aura Icon, Combat Log) (7), Do Not Log (8), Not In Spellbook (143), Allow Class Ability Procs (416)
 Effects          :
 #1 (id=283373)   : Apply Aura (6) | Modify Power Regen (110)
-                   Base Value: 10 | Scaled Value: 10 | Target: Self (1)
+                   Base Value: 10 | Scaled Value: 10 | Resource: mana | Target: Self (1)
 Description      : You regenerate mana $s1% faster.
 
 Name             : Benediction (id=193157) [Spell Family (6), Passive, Hidden] 

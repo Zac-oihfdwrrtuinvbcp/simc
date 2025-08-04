@@ -32,6 +32,7 @@ using namespace helpers;
       bool master_demonologist_dd = false;
       bool sacrificed_souls = false;
       bool wicked_maw = false;
+      bool shadowtouched = false;
       bool soul_conduit_base_cost = false;
       bool master_summoner = false;
 
@@ -107,8 +108,8 @@ using namespace helpers;
       affected_by.umbral_lattice_td = data().affected_by( p->tier.umbral_lattice->effectN( 2 ) );
 
       affected_by.master_demonologist_dd = data().affected_by( p->warlock_base.master_demonologist->effectN( 2 ) );
-      // TOCHECK: 2024-07-12 Despite the value of Effect 2 being 0 for Wicked Maw's debuff, the spells listed for it gain full value as if from Effect 1
-      affected_by.wicked_maw = data().affected_by( p->talents.wicked_maw_debuff->effectN( 1 ) ) || data().affected_by( p->talents.wicked_maw_debuff->effectN( 2 ) );
+      affected_by.wicked_maw = data().affected_by( p->talents.wicked_maw_debuff->effectN( 1 ) );
+      affected_by.shadowtouched = data().affected_by( p->talents.wicked_maw_debuff->effectN( 2 ) );
 
       affected_by.backdraft = data().affected_by( p->talents.backdraft_buff->effectN( 1 ) );
       affected_by.roaring_blaze = p->talents.roaring_blaze.ok() && data().affected_by( p->talents.conflagrate_debuff->effectN( 1 ) );
@@ -271,7 +272,7 @@ using namespace helpers;
 
       if ( diabolist() && triggers.demonic_art )
       {
-        if ( p()->sets->has_set_bonus( HERO_DIABLOIST, TWW3, B2 ) )
+        if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B2 ) )
           make_event( *sim, 0_ms, [ this ] {
             if ( p()->buffs.demonic_oculus->check() &&
                  ( p()->buffs.art_overlord->check() || p()->buffs.art_mother->check() ||
@@ -452,6 +453,9 @@ using namespace helpers;
 
       if ( demonology() && affected_by.wicked_maw )
         m *= 1.0 + td( t )->debuffs_wicked_maw->check_value();
+
+      if ( demonology() && affected_by.shadowtouched && p()->talents.shadowtouched.ok() && td( t )->debuffs_wicked_maw->check() )
+        m *= 1.0 + p()->talents.shadowtouched->effectN( 1 ).percent();
 
       if ( destruction() && affected_by.roaring_blaze && p()->talents.roaring_blaze.ok() )
         m *= 1.0 + td( t )->debuffs_conflagrate->check_value();
@@ -1543,6 +1547,8 @@ using namespace helpers;
   struct demonic_soul_t : public warlock_spell_t
   {
     bool demoniacs_fervor;
+    const double shadowtouched_value = 0.20;
+    const double shadowtouched_demoniacs_fervor_value = 0.10;
 
     demonic_soul_t( warlock_t* p )
       : warlock_spell_t( "Demonic Soul", p, p->hero.demonic_soul_dmg ),
@@ -1551,6 +1557,7 @@ using namespace helpers;
       background = dual = true;
 
       affected_by.master_demonologist_dd = demonology(); // Note: Technically Demonic Soul is on a separate effect from the others.
+      affected_by.shadowtouched = false; // Note: We set this to false because we will handle it in the overridden 'composite_target_multiplier' function
 
       base_dd_multiplier *= 1.0 + p->hero.wicked_reaping->effectN( 1 ).percent();
 
@@ -1564,6 +1571,22 @@ using namespace helpers;
 
       if ( demoniacs_fervor )
         m *= 1.0 + p()->hero.demoniacs_fervor->effectN( 1 ).percent();
+
+      return m;
+    }
+
+    double composite_target_multiplier( player_t* t ) const override
+    {
+      double m = warlock_spell_t::composite_target_multiplier( t );
+
+      // TOCHECK: 2025-07-27 Despite what is listed in spell data, Shadowtouched increases the damage of Demonic Soul (+10% for main target (demoniacs_fervor), +20% for the rest) (bug?)
+      if ( demonology() && p()->bugs && p()->talents.shadowtouched.ok() && td( t )->debuffs_wicked_maw->check() )
+      {
+        if ( demoniacs_fervor )
+          m *= 1.0 + shadowtouched_demoniacs_fervor_value;
+        else
+          m *= 1.0 + shadowtouched_value;
+      }
 
       return m;
     }
@@ -1594,12 +1617,15 @@ using namespace helpers;
 
   struct wicked_reaping_t : public warlock_spell_t
   {
+    const double shadowtouched_value = 0.50;
+
     wicked_reaping_t( warlock_t* p )
       : warlock_spell_t( "Wicked Reaping", p, p->hero.wicked_reaping_dmg )
     {
       background = dual = true;
 
       affected_by.master_demonologist_dd = demonology();
+      affected_by.shadowtouched = false; // Note: We set this to false because we will handle it in the overridden 'composite_target_multiplier' function
 
       base_dd_multiplier *= 1.0 + p->hero.wicked_reaping->effectN( 1 ).percent();
 
@@ -1608,6 +1634,17 @@ using namespace helpers;
 
       if ( p->hero.soul_anathema.ok() )
         impact_action = new soul_anathema_t( p );
+    }
+
+    double composite_target_multiplier( player_t* t ) const override
+    {
+      double m = warlock_spell_t::composite_target_multiplier( t );
+
+      // TOCHECK: 2025-07-27 Despite what is listed in spell data, Shadowtouched increases the damage of Wicked Reaping (+50%) (bug?)
+      if ( demonology() && p()->bugs && p()->talents.shadowtouched.ok() && td( t )->debuffs_wicked_maw->check() )
+        m *= 1.0 + shadowtouched_value;
+
+      return m;
     }
   };
 
@@ -2776,7 +2813,7 @@ using namespace helpers;
 
       p()->procs.hand_of_guldan_shards[ lrc ]->occur();
 
-      if ( p()->sets->has_set_bonus( HERO_DIABLOIST, TWW3, B2 ) && lrc == 2 /*Manually hardcoding for now since im not sure how the cost data is read*/)
+      if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B2 ) && lrc == 2 /*Manually hardcoding for now since im not sure how the cost data is read*/)
         p()->buffs.demonic_oculus->trigger();
     }
 
@@ -2948,8 +2985,6 @@ using namespace helpers;
         aoe = -1;
         background = dual = true;
         callbacks = false;
-
-        affected_by.wicked_maw = p->talents.shadowtouched.ok(); // 2024-08-01: Despite what is listed in spell data, Wicked Maw seems to only work with Shadowtouched now for Implosion
 
         base_dd_multiplier = 1.0 + p->talents.spiteful_reconstitution->effectN( 1 ).percent();
       }
@@ -3134,6 +3169,9 @@ using namespace helpers;
         callbacks = false;
         radius = p->talents.bilescourge_bombers->effectN( 1 ).radius();
 
+        // TOCHECK: 2025-07-27 Despite what is listed in spell data, Wicked Maw seems to only work with Shadowtouched now for Bilescourge Bombers (bug?)
+        affected_by.wicked_maw = p->bugs && p->talents.shadowtouched.ok();
+
         base_dd_multiplier *= 1.0 + p->talents.shadow_invocation->effectN( 1 ).percent();
       }
     };
@@ -3177,6 +3215,9 @@ using namespace helpers;
       background = dual = direct_tick = true;
       callbacks = false;
       radius = p->find_spell( 267211 )->effectN( 1 ).radius();
+
+      // TOCHECK: 2025-07-27 Despite what is listed in spell data, Wicked Maw seems to only work with Shadowtouched now for Bilescourge Bombers (bug?)
+      affected_by.wicked_maw = p->bugs && p->talents.shadowtouched.ok();
 
       base_dd_multiplier *= 1.0 + p->talents.shadow_invocation->effectN( 1 ).percent();
     }
@@ -3901,7 +3942,7 @@ using namespace helpers;
 
     void execute() override
     {
-      if ( p()->sets->has_set_bonus( HERO_DIABLOIST, TWW3, B2 ) )
+      if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B2 ) )
         p()->buffs.demonic_oculus->trigger();
 
       warlock_spell_t::execute();
@@ -4091,7 +4132,7 @@ using namespace helpers;
 
     void execute() override
     {
-      if ( p()->sets->has_set_bonus( HERO_DIABLOIST, TWW3, B2 ) )
+      if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B2 ) )
         p()->buffs.demonic_oculus->trigger();
 
       warlock_spell_t::execute();
@@ -4212,7 +4253,7 @@ using namespace helpers;
 
     void execute() override
     {
-      if ( p()->sets->has_set_bonus( HERO_DIABLOIST, TWW3, B2 ) )
+      if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B2 ) )
         p()->buffs.demonic_oculus->trigger();
 
       warlock_spell_t::execute();
@@ -4726,8 +4767,11 @@ using namespace helpers;
       // In its own effect on mastery, so just manually applying it here rather than adding the affected_by to warlock_spell_t
       if ( p()->warlock_base.master_demonologist->ok() )
         m *= 1.0 + p()->cache.mastery_value();
-
+      if ( p()->specialization() == WARLOCK_DEMONOLOGY )
+        m *= 1.0 + p()->sets->set( HERO_DIABOLIST, TWW3, B2 )->effectN( 2 ).percent();
+    
       m *= p()->buffs.demonic_oculus->check();
+    
 
       return m;
     }
@@ -4773,7 +4817,7 @@ using namespace helpers;
     void execute() override
     {
       // In game happens just before the damage
-      if ( p()->sets->has_set_bonus( HERO_DIABLOIST, TWW3, B4 ) )
+      if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B4 ) )
         p()->buffs.demonic_intelligence->trigger( p()->buffs.demonic_oculus->check() );
 
       eye_blast_base_t::execute();

@@ -2320,12 +2320,49 @@ namespace diabolist
       debug_cast<overlord_t*>( p() )->cleaves--;
     }
 
+    double composite_da_multiplier( const action_state_t* s ) const override
+    {
+      double m = warlock_pet_spell_t::composite_da_multiplier( s );  // base value
+
+      if ( p()->o()->specialization() == WARLOCK_DEMONOLOGY )
+      {
+        // Added in build: 11.2.0.62253: reduces Diab Demons Damage by 20% for Demonology
+        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
+          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
+        // Wicked Cleave is mistakenly whitelisted on Effect 1 for Demonology Aura, Double Dipping alongside effect 5.
+        m *= 1.0 + p()->o()->warlock_base.demonology_warlock->effectN( 1 ).percent();
+      }
+
+      if ( p()->o()->specialization() == WARLOCK_DESTRUCTION )
+      {
+        // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
+        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
+          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
+        // Buff  from May 27, 2025 Hotfix Increased the damage of Felseeker, Chaos Salvo and Wicked Cleave by 15% for
+        // Destruction, No reference spell for it in the hotfix located.
+        m *= 1.15;
+      }
+
+      return m;
+    }
+
     void impact( action_state_t* s ) override
     {
       warlock_pet_spell_t::impact( s );
 
       if ( p()->o()->hero.cloven_souls.ok() )
         owner_td( s->target )->debuffs_cloven_soul->trigger();
+    }
+
+    double composite_target_multiplier( player_t* target ) const override
+    {
+      double m = spell_t::composite_target_multiplier( target );
+
+      // TOCHECK: 2025-07-27 Wicked Cleave spell from Overlord does not benefit from Shadowtouched talent even though its damage school is Shadowflame (bug?)
+      if ( !p()->bugs && p()->o()->talents.shadowtouched.ok() && dbc::has_common_school( spell_t::get_school(), SCHOOL_SHADOW ) && owner_td( target )->debuffs_wicked_maw->check() )
+        m *= 1.0 + p()->o()->talents.shadowtouched->effectN( 1 ).percent();
+
+      return m;
     }
   };
 
@@ -2359,6 +2396,32 @@ namespace diabolist
       aoe = -1;
 
       travel_speed = p->o()->hero.chaos_salvo_missile->missile_speed();
+    }
+
+    double composite_da_multiplier( const action_state_t* s ) const override
+    {
+      double m = warlock_pet_spell_t::composite_da_multiplier( s );  // base value
+
+      if ( p()->o()->specialization() == WARLOCK_DEMONOLOGY )
+      {
+        // Added in build: 11.2.0.62253: reduces Diab Demons Damage by 20% for Demonology
+        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
+          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
+        // Wicked Cleave is mistakenly whitelisted on Effect 1 for Demonology Aura, Double Dipping alongside effect 5.
+        m *= 1.0 + p()->o()->warlock_base.demonology_warlock->effectN( 1 ).percent();
+      }
+
+      if ( p()->o()->specialization() == WARLOCK_DESTRUCTION )
+      {
+        // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
+        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
+          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
+        // Buff  from May 27, 2025 Hotfix Increased the damage of Felseeker, Chaos Salvo and Wicked Cleave by 15% for
+        // Destruction, No reference spell for it in the hotfix located.
+        m *= 1.15;
+      }
+
+      return m;
     }
   };
 
@@ -2412,6 +2475,8 @@ namespace diabolist
 
   struct felseeker_tick_t : public warlock_pet_spell_t
   {
+    const double shadowtouched_value = 0.25;
+
     felseeker_tick_t( warlock_pet_t* p )
       : warlock_pet_spell_t( "Felseeker (tick)", p, p->o()->hero.felseeker_dmg )
     {
@@ -2419,6 +2484,44 @@ namespace diabolist
       aoe = -1;
 
       base_costs[ RESOURCE_ENERGY ] = 0.0;
+    }
+
+    double composite_target_multiplier( player_t* target ) const override
+    {
+      double m = spell_t::composite_target_multiplier( target );
+
+      // TOCHECK: 2025-07-27 Despite what is listed in spell data, Shadowtouched increases the damage of Feelseeker spell from Pit Lord by 25% instead of 20% (bug?)
+      // TODO: After 11.2.0 goes live, remove the wow version check
+      if ( p()->o()->talents.shadowtouched.ok() && dbc::has_common_school( spell_t::get_school(), SCHOOL_SHADOW ) && owner_td( target )->debuffs_wicked_maw->check() )
+        m *= 1.0 + ( ( p()->bugs && ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } ) ) ? shadowtouched_value : p()->o()->talents.shadowtouched->effectN( 1 ).percent() );
+
+      return m;
+    }
+
+    double composite_da_multiplier( const action_state_t* s ) const override
+    {
+      double m = warlock_pet_spell_t::composite_da_multiplier( s );  // base value
+
+      if ( p()->o()->specialization() == WARLOCK_DEMONOLOGY )
+      {
+        // Added in build: 11.2.0.62253: reduces Diab Demons Damage by 20% for Demonology
+        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
+          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
+        // Wicked Cleave is mistakenly whitelisted on Effect 1 for Demonology Aura, Double Dipping alongside effect 5.
+        m *= 1.0 + p()->o()->warlock_base.demonology_warlock->effectN( 1 ).percent();
+      }
+
+      if ( p()->o()->specialization() == WARLOCK_DESTRUCTION )
+      {
+        // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
+        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
+          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
+        // Buff  from May 27, 2025 Hotfix Increased the damage of Felseeker, Chaos Salvo and Wicked Cleave by 15% for
+        // Destruction, No reference spell for it in the hotfix located.
+        m *= 1.15;
+      }
+
+      return m;
     }
   };
 
