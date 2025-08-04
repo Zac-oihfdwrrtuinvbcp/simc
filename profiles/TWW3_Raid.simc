@@ -4,8 +4,8 @@ ptr=1
 optimal_raid=1
 default_actions=1
 
-# TWW3_Death_Knight_Blood.simc
-# TWW3_Death_Knight_Blood_Deathbringer.simc
+TWW3_Death_Knight_Blood.simc
+TWW3_Death_Knight_Blood_Deathbringer.simc
 # TWW3_Death_Knight_Frost.simc
 # TWW3_Death_Knight_Frost_Rider.simc
 # TWW3_Death_Knight_Frost_Deathbringer.simc
@@ -14,7 +14,8 @@ TWW3_Death_Knight_Unholy_San'layn.simc
 
 # TWW3_Demon_Hunter_Havoc.simc
 # TWW3_Demon_Hunter_Havoc_Fel-Scarred.simc
-# TWW3_Demon_Hunter_Vengeance.simc
+TWW3_Demon_Hunter_Vengeance.simc
+TWW3_Demon_Hunter_Vengeance_Aldrachi_Reaver.simc
 
 # TWW3_Druid_Balance.simc
 # TWW3_Druid_Feral.simc
@@ -49,13 +50,14 @@ TWW3_Priest_Shadow.simc
 TWW3_Priest_Shadow_Archon.simc
 
 # TWW3_Rogue_Assassination.simc
-# TWW3_Rogue_Outlaw.simc
+TWW3_Rogue_Outlaw.simc
 # TWW3_Rogue_Subtlety.simc
 
 # TWW3_Shaman_Elemental_Stormbringer.simc
 # TWW3_Shaman_Elemental.simc
-# TWW3_Shaman_Enhancement.simc
-# TWW3_Shaman_Enhancement_Stormbringer.simc
+TWW3_Shaman_Enhancement.simc
+TWW3_Shaman_Enhancement_DRE.simc
+TWW3_Shaman_Enhancement_Totemic.simc
 
 # TWW3_Warlock_Affliction_Soul_Harvester.simc
 TWW3_Warlock_Affliction.simc
@@ -66,5 +68,5 @@ TWW3_Warlock_Destruction.simc
 
 # TWW3_Warrior_Arms.simc
 # TWW3_Warrior_Fury.simc
-# TWW3_Warrior_Protection.simc
-# TWW3_Warrior_Protection_Thane.simc
+TWW3_Warrior_Protection.simc
+TWW3_Warrior_Protection_Colossus.simc

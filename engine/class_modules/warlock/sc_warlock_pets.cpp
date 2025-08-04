@@ -1821,8 +1821,8 @@ infernal_t::infernal_t( warlock_t* owner, util::string_view name )
 
   type = MAIN;
 
-  owner_coeff.ap_from_sp = 1.65;
-  owner_coeff.sp_from_sp = 1.65;
+  owner_coeff.ap_from_sp = 2.2275;
+  owner_coeff.sp_from_sp = 2.2275;
 }
 
 struct immolation_tick_t : public warlock_pet_spell_t
@@ -1902,6 +1902,17 @@ double infernal_t::composite_player_multiplier( school_e school ) const
 
 /// Infernal End
 
+/// Infernal Rain of Chaos Begin
+
+infernal_roc_t::infernal_roc_t( warlock_t* owner, util::string_view name ) : destruction::infernal_t( owner, name )
+{
+  type                   = RAIN;
+  owner_coeff.ap_from_sp = 1.5;
+  owner_coeff.sp_from_sp = 1.5;
+}
+
+/// Infernal Rain of Chaos End
+/// 
 /// Dimensional Rifts Begin
 
 struct dimensional_cinder_t : public warlock_pet_spell_t
@@ -1947,7 +1958,13 @@ struct rift_shadow_bolt_t : public warlock_pet_spell_t
 {
   rift_shadow_bolt_t( warlock_pet_t* p )
     : warlock_pet_spell_t( "Shadow Bolt", p, p->o()->talents.rift_shadow_bolt )
-  { background = dual = true; }
+  {
+      background = dual = true;
+
+      // Double dips from whitelist+guardian aura
+      base_dd_multiplier *= 1.0 + p->o()->talents.summoners_embrace->effectN( 1 ).percent();
+      base_dd_multiplier *= 1.0 + p->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
+  }
 
   double composite_crit_damage_bonus_multiplier() const override
   {
@@ -2027,7 +2044,13 @@ struct chaos_barrage_tick_t : public warlock_pet_spell_t
 {
   chaos_barrage_tick_t( warlock_pet_t* p )
     : warlock_pet_spell_t( "Chaos Barrage (tick)", p, p->o()->talents.chaos_barrage_tick )
-  { background = dual = true; }
+  {
+      background = dual = true; 
+  
+      // Double dips from whitelist+guardian aura
+      base_dd_multiplier *= 1.0 + p->o()->talents.summoners_embrace->effectN( 1 ).percent();
+      base_dd_multiplier *= 1.0 + p->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
+  }
 
   double composite_crit_damage_bonus_multiplier() const override
   {
@@ -2105,6 +2128,11 @@ struct rift_chaos_bolt_t : public warlock_pet_spell_t
   rift_chaos_bolt_t( warlock_pet_t* p )
     : warlock_pet_spell_t( "Chaos Bolt", p, p->o()->talents.rift_chaos_bolt )
   {
+
+    // Double dips from whitelist+guardian aura
+    base_dd_multiplier *= 1.0 + p->o()->talents.summoners_embrace->effectN( 1 ).percent();
+    base_dd_multiplier *= 1.0 + p->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
+
     if ( p->o()->talents.unstable_rifts.ok() )
     {
       debug_cast<chaos_tear_t*>( p )->cinder = new dimensional_cinder_t( p );
@@ -2338,9 +2366,12 @@ namespace diabolist
         // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
         if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
           m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
-        // Buff  from May 27, 2025 Hotfix Increased the damage of Felseeker, Chaos Salvo and Wicked Cleave by 15% for
-        // Destruction, No reference spell for it in the hotfix located.
-        m *= 1.15;
+        // Destruction Aura Double Dips due to Diabolist Demon spells being whitelisted on effect 1.
+        m *= 1.0 + p()->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
+        // Destruction Summoners Embrace also Double Dip due to the same fact.
+        // Those two effects together is what made me believe the May 27 buff got applied.
+        if ( p()->o()->talents.summoners_embrace.ok() )
+          m *= 1.0 + p()->o()->talents.summoners_embrace->effectN( 1 ).percent();
       }
 
       return m;
@@ -2416,9 +2447,12 @@ namespace diabolist
         // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
         if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
           m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
-        // Buff  from May 27, 2025 Hotfix Increased the damage of Felseeker, Chaos Salvo and Wicked Cleave by 15% for
-        // Destruction, No reference spell for it in the hotfix located.
-        m *= 1.15;
+        // Destruction Aura Double Dips due to Diabolist Demon spells being whitelisted on effect 1.
+        m *= 1.0 + p()->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
+        // Destruction Summoners Embrace also Double Dip due to the same fact.
+        // Those two effects together is what made me believe the May 27 buff got applied.
+        if ( p()->o()->talents.summoners_embrace.ok() )
+          m *= 1.0 + p()->o()->talents.summoners_embrace->effectN( 1 ).percent();
       }
 
       return m;
@@ -2516,9 +2550,12 @@ namespace diabolist
         // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
         if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
           m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
-        // Buff  from May 27, 2025 Hotfix Increased the damage of Felseeker, Chaos Salvo and Wicked Cleave by 15% for
-        // Destruction, No reference spell for it in the hotfix located.
-        m *= 1.15;
+        // Destruction Aura Double Dips due to Diabolist Demon spells being whitelisted on effect 1.
+        m *= 1.0 + p()->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
+        // Destruction Summoners Embrace also Double Dip due to the same fact.
+        // Those two effects together is what made me believe the May 27 buff got applied.
+        if ( p()->o()->talents.summoners_embrace.ok() )
+          m *= 1.0 + p()->o()->talents.summoners_embrace->effectN( 1 ).percent();
       }
 
       return m;
@@ -2582,8 +2619,8 @@ namespace diabolist
     : destruction::infernal_t( owner, name )
   {
     type = FRAG;
-    owner_coeff.ap_from_sp *= owner->hero.abyssal_dominion->effectN( 4 ).percent();
-    owner_coeff.sp_from_sp *= owner->hero.abyssal_dominion->effectN( 4 ).percent();
+    owner_coeff.ap_from_sp = 1.5 * owner->hero.abyssal_dominion->effectN( 4 ).percent();
+    owner_coeff.sp_from_sp = 1.5 * owner->hero.abyssal_dominion->effectN( 4 ).percent();
   }
 
   /// Infernal Fragment End

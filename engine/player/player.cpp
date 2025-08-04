@@ -838,64 +838,19 @@ bool parse_source( sim_t* sim, std::string_view, std::string_view value )
 
 bool parse_set_bonus( sim_t* sim, std::string_view, std::string_view value )
 {
-  static constexpr const char* error_str = "{} invalid 'set_bonus' option value '{}' given, available options: {}";
-
   player_t* p = sim->active_player;
 
-  set_bonus_type_e tier = SET_BONUS_NONE;
-  set_bonus_e bonus = B_NONE;
-  bool enabled = false;
-  specialization_e spec = SPEC_NONE;
-  hero_talent_e hero = HERO_NONE;
-
-  if ( p->sets->parse_set_bonus_option_verbose( value, tier, bonus, enabled, spec, hero ) )
+  if ( !p->set_bonus_str.empty() )
   {
-    p->sets->set_bonus_spec_data[ tier ][ dbc::composite_idx( spec, hero, sim->dbc->ptr ) ][ bonus ].overridden =
-      enabled;
-    return true;
+    sim->error( error_level_e::MODERATE,
+                "Starting with 12.0, multiples lines of the 'set_bonus=' option must be either A) on a single line, delimited by '/', or B) have extra lines concatenated by using 'set_bonus+=', note the '+='." );
+
+    p->set_bonus_str += fmt::format( "/{}", value );
   }
-
-  auto set_bonus_split = util::string_split<std::string_view>( value, "=" );
-
-  if ( set_bonus_split.size() != 2 )
+  else
   {
-    sim->error( error_str, p->name(), value, p->sets->generate_set_bonus_options() );
-    return false;
+    p->set_bonus_str = std::string{ value };
   }
-
-  int opt_val = util::to_int( set_bonus_split[ 1 ] );
-  if ( opt_val != 0 && opt_val != 1 )
-  {
-    sim->error( error_str, p->name(), value, p->sets->generate_set_bonus_options() );
-    return false;
-  }
-
-  if ( !p->sets->parse_set_bonus_option( set_bonus_split[ 0 ], tier, bonus, hero ) )
-  {
-    sim->error( error_str, p->name(), value, p->sets->generate_set_bonus_options() );
-    return false;
-  }
-
-  if ( hero != HERO_NONE )
-  {
-    p->sets->set_bonus_spec_data[ tier ][ dbc::composite_idx( spec, hero, sim->dbc->ptr ) ][ bonus ].overridden =
-      opt_val;
-    return true;
-  }
-
-  const auto* item_set_bonus =
-    p->sets->set_bonus_spec_data[ tier ][ dbc::spec_idx( p->specialization(), sim->dbc->ptr ) ][ bonus ].bonus;
-
-  if ( !item_set_bonus || item_set_bonus->trait_sub_tree != -1 )
-  {
-    p->sim->error(
-      "The unspecified set bonus option does not support tier sets enabled by TraitSubTree! Check Equipment page of "
-      "wiki for alternative syntax." );
-    return false;
-  }
-
-  p->sets->set_bonus_spec_data[ tier ][ dbc::spec_idx( p->specialization(), sim->dbc->ptr ) ][ bonus ].overridden =
-    opt_val;
 
   return true;
 }
@@ -1416,7 +1371,7 @@ void player_t::init()
   // Validate current fight style is supported by the actor's module.
   if ( !validate_fight_style( sim->fight_style ) )
   {
-    sim->error( "{} does not support fight style {}, results may be unreliable.", *this,
+    sim->error( error_level_e::SEVERE, "{} does not support fight style {}, results may be unreliable.", *this,
                 util::fight_style_string( sim->fight_style ) );
   }
 
@@ -1482,18 +1437,6 @@ void player_t::init()
     world_lag.stddev = world_lag.mean * 0.1;
   if ( brain_lag.stddev < 0_ms )
     brain_lag.stddev = brain_lag.mean * 0.1;
-}
-
-/**
- * Initialize race, specialization, talents, professions
- */
-void player_t::init_character_properties()
-{
-  init_race();
-  init_talents();
-  replace_spells();
-  init_position();
-  init_professions();
 }
 
 /**
@@ -2511,10 +2454,11 @@ static void parse_traits( talent_tree tree, const std::string& opt_str, player_t
       } );
 
       auto id_entry = trait_obj->id_trait_node_entry;
-      auto entry = std::make_tuple( tree, id_entry, std::min( ranks, trait_obj->max_ranks ) );
 
       if ( it != player->player_traits.end() )
       {
+        auto entry = std::make_tuple( tree, id_entry, std::min( ranks, trait_obj->max_ranks ) );
+
         if ( std::get<2>( *it ) != std::get<2>( entry ) )
         {
           player->sim->print_log( "Overwriting talent {} ({}), rank {} -> {}", trait_obj->name, id_entry,
@@ -2523,23 +2467,25 @@ static void parse_traits( talent_tree tree, const std::string& opt_str, player_t
 
         *it = entry;
       }
-      else
+      else if ( ranks )
       {
+        auto entry = std::make_tuple( tree, id_entry, std::min( ranks, trait_obj->max_ranks ) );
+
         player->player_traits.push_back( entry );
         player->sim->print_debug( "{} adding {} talent {}", *player, util::talent_tree_string( tree ),
                                   trait_obj->name );
-      }
 
-      if ( tree == talent_tree::HERO )
-      {
-        player->player_sub_traits.push_back( id_entry );
-
-        if( !player->player_sub_trees.count( trait_obj->id_sub_tree ) )
+        if ( tree == talent_tree::HERO )
         {
-          player->player_sub_trees.insert( trait_obj->id_sub_tree );
-          player->sim->print_debug( "{} activating sub tree {} ({})", *player,
-                                    trait_data_t::get_hero_tree_name( trait_obj->id_sub_tree, player->is_ptr() ),
-                                    trait_obj->id_sub_tree );
+          player->player_sub_traits.push_back( id_entry );
+
+          auto _ret = player->player_sub_trees.insert( trait_obj->id_sub_tree );
+          if ( _ret.second )
+          {
+            player->sim->print_debug( "{} activating sub tree {} ({})", *player,
+                                      trait_data_t::get_hero_tree_name( trait_obj->id_sub_tree, player->is_ptr() ),
+                                      trait_obj->id_sub_tree );
+          }
         }
       }
     }
@@ -2573,6 +2519,9 @@ static bool generate_tree_nodes( player_t* player,
     for ( const auto& trait : trait_data_t::data( class_idx, i, maybe_ptr( player->dbc->ptr ) ) )
       tree_nodes[ trait.id_node ].emplace_back( &trait, 0 );
   }
+
+  player->sim->print_debug( "{}: {} tree nodes generated for spec {}.", *player, tree_nodes.size(),
+                            util::specialization_string( spec ) );
 
   return true;
 }
@@ -2751,7 +2700,8 @@ static std::string generate_traits_hash( player_t* player )
 static void parse_traits_hash( const std::string& talents_str, player_t* player )
 {
   auto do_error = [ player, &talents_str ]( std::string_view msg = {} ) {
-    player->sim->error( "Player {} has invalid talent tree hash {}{}{}", player->name(), talents_str, msg.empty() ? "" : ": ", msg );
+    player->sim->error( error_level_e::SEVERE, "Player {} has invalid talent tree hash {}{}{}", player->name(),
+                        talents_str, msg.empty() ? "" : ": ", msg );
   };
 
   if ( talents_str.find_first_not_of( base64_char ) != std::string::npos )
@@ -2806,9 +2756,9 @@ static void parse_traits_hash( const std::string& talents_str, player_t* player 
   player->player_sub_trees.clear();
   player->player_sub_traits.clear();
 
-  // As per Interface/AddOns/Blizzard_ClassTalentUI/Blizzard_ClassTalentImportExport.lua: treeHash is a 128bit hash,
-  // passed as an array of 16, 8-bit values. For SimC purposes we can ignore it, as invalid/outdated strings can error
-  // in later checks
+  // As per Interface/AddOns/Blizzard_PlayerSpells/ClassTalents/Blizzard_ClassTalentImportExport.lua: treeHash is a
+  // 128bit hash, passed as an array of 16, 8-bit values. For SimC purposes we can ignore it, as invalid/outdated
+  // strings can error in later checks
   get_bit( tree_bits );
 
   std::map<unsigned, std::vector<std::pair<const trait_data_t*, unsigned>>> tree_nodes;
@@ -2839,7 +2789,8 @@ static void parse_traits_hash( const std::string& talents_str, player_t* player 
            !std::all_of( trait->id_spec.begin(), trait->id_spec.end(), []( unsigned i ) { return i == 0; } ) &&
            !range::contains( trait->id_spec, player->specialization() ) )
       {
-        do_error( fmt::format( "selected node {} is not available to player's spec.", id ) );
+        do_error( fmt::format( "selected node {} entry {} is not available to player's spec.", id,
+                               trait->id_trait_node_entry ) );
         return;
       }
 
@@ -2903,7 +2854,8 @@ static void parse_traits_hash( const std::string& talents_str, player_t* player 
       }
       else
       {
-        player->sim->print_debug( "{} adding {} talent {}", *player, util::talent_tree_string( _tree ), trait->name );
+        player->sim->print_debug( "{} adding {} talent {} ({})", *player, util::talent_tree_string( _tree ),
+                                  trait->name, trait->id_trait_node_entry );
       }
     }
   }
@@ -2978,6 +2930,35 @@ static void enable_default_talents( player_t* player )
   }
 }
 
+static void enable_hero_tree( player_t* player, unsigned hero_tree_id )
+{
+  player->sim->print_debug( "Loading all {} hero tree talents for {}.",
+                            trait_data_t::get_hero_tree_name( hero_tree_id ), *player );
+
+  auto traits = trait_data_t::data( util::class_id( player->type ), talent_tree::SELECTION, player->is_ptr() );
+  for ( const auto& trait : traits )
+  {
+    if ( trait.id_sub_tree == hero_tree_id && range::contains( trait.id_spec, player->specialization() ) )
+    {
+      player->player_traits.emplace_back( talent_tree::SELECTION, trait.id_trait_node_entry, trait.max_ranks );
+      player->player_sub_trees.insert( hero_tree_id );
+      player->sim->print_debug( "{} activating sub tree {} ({})", *player,
+                                trait_data_t::get_hero_tree_name( hero_tree_id, player->is_ptr() ), hero_tree_id );
+    }
+  }
+
+  traits = trait_data_t::data( util::class_id( player->type ), talent_tree::HERO, player->is_ptr() );
+  for ( const auto& trait : traits )
+  {
+    // assume 'off-screen' nodes are invalid
+    if ( trait.row <= 0 || trait.col <= 0 || trait.max_ranks <= 0 )
+      continue;
+
+    player->player_traits.emplace_back( talent_tree::HERO, trait.id_trait_node_entry, trait.max_ranks );
+    player->sim->print_debug( "{} adding hero talent {}", *player, trait.name );
+  }
+}
+
 void player_t::init_talents()
 {
   sim->print_debug( "Initializing talents for {}.", *this );
@@ -3005,7 +2986,36 @@ void player_t::init_talents()
 
   parse_traits( talent_tree::CLASS, class_talents_str, this );
   parse_traits( talent_tree::SPECIALIZATION, spec_talents_str, this );
-  parse_traits( talent_tree::HERO, hero_talents_str, this );
+
+  if ( !hero_talents_str.empty() )
+  {
+    // enable all hero tree, tokenized name
+    if ( auto hero_tree_id = trait_data_t::get_hero_tree_id( hero_talents_str, is_ptr() );
+         trait_data_t::is_hero_tree_valid( static_cast<hero_tree_e>( hero_tree_id ), specialization(), is_ptr() ) )
+    {
+      enable_hero_tree( this, hero_tree_id );
+    }
+    // enable all hero tree, index (1 or 2)
+    else if ( util::is_number( hero_talents_str ) )
+    {
+      auto _id = util::to_unsigned( hero_talents_str );
+      auto hero_trees = trait_data_t::get_valid_hero_tree_ids( specialization(), is_ptr() );
+
+      if ( _id > hero_trees.size() )
+      {
+        sim->error( "Invalid hero tree index {}. {} has {} hero trees.", _id, *this, hero_trees.size() );
+        sim->cancel();
+      }
+
+      auto hero_id = trait_data_t::get_valid_hero_tree_ids( specialization(), is_ptr() ).at( _id - 1 );
+      enable_hero_tree( this, hero_id );
+    }
+    // standard talent:rank/ format
+    else
+    {
+      parse_traits( talent_tree::HERO, hero_talents_str, this );
+    }
+  }
 
   // Add selection traits for any manually added hero traits from new trees
   if ( player_sub_trees.size() > parsed_sub_trees.size() )
@@ -3498,6 +3508,8 @@ void player_t::parse_assisted_combat_step( const assisted_combat_step_data_t& st
   std::string comment = "";
   bool show_diff = false;
   bool cooldown_allow_casting_success = false;
+  bool allow_duplicates = true;
+
   for ( const auto& rule : assisted_combat_rule_data_t::data( step.id, is_ptr() ) )
   {
     if ( rule.condition_type == COOLDOWN_ALLOW_CASTING_SUCCESS )
@@ -3510,6 +3522,9 @@ void player_t::parse_assisted_combat_step( const assisted_combat_step_data_t& st
       expr += expr.empty() ? derived_combat_rule.expr : "&" + derived_combat_rule.expr;
     if ( !derived_combat_rule.comment.empty() )
       comment += comment.empty() ? derived_combat_rule.comment : ", " + derived_combat_rule.comment;
+    if ( !derived_combat_rule.allow_duplicates )
+      allow_duplicates = false;
+
     if ( !base_combat_rule.expr.empty() )
       base_expr += base_expr.empty() ? base_combat_rule.expr : "&" + base_combat_rule.expr;
 
@@ -3531,6 +3546,10 @@ void player_t::parse_assisted_combat_step( const assisted_combat_step_data_t& st
 
     if ( cooldown_allow_casting_success )
       action_str += ",cooldown_allow_casting_success=1";
+
+    // Optional duplicate filtering for messy action lists or duplicated overriden criteria
+    if ( !allow_duplicates && range::contains( assisted_combat->action_list, action_str, []( const auto& entry ) { return entry.action_; } ) )
+      continue;
 
     assisted_combat->add_action( action_str, comment );
   }
@@ -4274,14 +4293,10 @@ void player_t::init_finished()
   // TODO: Energy pooling, and energy-based expressions (energy>=10) are not included yet
   for ( auto action : action_list )
   {
-    if ( !action->background && action->base_costs[ primary_resource() ] > 0 )
-    {
-      if ( std::find( resource_thresholds.begin(), resource_thresholds.end(),
-                      action->base_costs[ primary_resource() ] ) == resource_thresholds.end() )
-      {
-        resource_thresholds.push_back( action->base_costs[ primary_resource() ] );
-      }
-    }
+    auto _cost = action->base_costs[ primary_resource() ];
+
+    if ( !action->background && _cost > 0 && !range::contains( resource_thresholds, _cost ) )
+      resource_thresholds.push_back( action->base_costs[ primary_resource() ] );
   }
 
   range::sort( resource_thresholds );
@@ -4498,7 +4513,7 @@ void player_t::min_threshold_trigger()
   timespan_t time_to_threshold = timespan_t::zero();
   if ( i < resource_thresholds.size() )
   {
-    double rps = resources.base_regen_per_second[ pres ];
+    double rps = resource_regen_per_second( pres );
 
     if ( rps > 0 )
     {
@@ -4560,10 +4575,11 @@ void player_t::create_buffs()
   // Infinite-Stacking Buffs and De-Buffs for everyone
   buffs.stunned = make_buff( this, "stunned" )
     ->set_max_stack( 1 )
-    ->set_stack_change_callback( [ this ]( buff_t*, int, int new_ ) {
-      if ( new_ == 0 )
-        schedule_ready();
-    } );
+    ->set_expire_callback( [ this ]( buff_t*, int, timespan_t d ) 
+      {
+        if ( !sim->event_mgr.canceled && d == timespan_t::zero() )
+          trigger_ready();
+      } );
 
   buffs.rooted = make_buff( this, "rooted" )->set_max_stack( 1 )->set_quiet( true );
 
@@ -6802,12 +6818,15 @@ void player_t::trigger_ready()
     return;
   if ( !active_during_iteration )
     return;
+  if ( sim->event_mgr.canceled )
+    return;
 
   if ( buffs.stunned->check() )
     return;
+  if ( is_moving() )
+    return;
 
-  sim->print_debug( "{} is triggering ready, interval={}", *this,
-                           ( sim->current_time() - started_waiting ) );
+  sim->print_debug( "{} is triggering ready, interval={}", *this, ( sim->current_time() - started_waiting ) );
 
   iteration_waiting_time += sim->current_time() - started_waiting;
   started_waiting = timespan_t::min();
@@ -7121,7 +7140,9 @@ void player_t::arise()
     acquire_target( retarget_source::SELF_ARISE );
   }
 
-  if ( has_foreground_actions( *this ) )
+  // ready_type READY_TRIGGER may already have scheduled a ready event, so we need to check if we are already
+  // readying.
+  if ( !readying && has_foreground_actions( *this ) )
     schedule_ready();
 
   active_during_iteration = true;
@@ -7695,6 +7716,11 @@ role_e player_t::primary_role() const
 const char* player_t::primary_tree_name() const
 {
   return dbc::specialization_string( specialization() );
+}
+
+bool player_t::has_hero_tree( hero_tree_e hero ) const
+{
+  return player_sub_trees.count( static_cast<unsigned>( hero ) );
 }
 
 bool player_t::has_shield_equipped() const
@@ -11169,7 +11195,7 @@ static player_talent_t create_talent_obj( const player_t* player, const trait_da
 
   // all allocated hero talents are present but disabled if the control talent is not active unless it has been manually
   // added to the profile or sim_t::enable_all_talents is set
-  if ( _tree == talent_tree::HERO && !range::contains( player->player_sub_trees, trait->id_sub_tree ) &&
+  if ( _tree == talent_tree::HERO && !player->player_sub_trees.count( trait->id_sub_tree ) &&
        !range::contains( player->player_sub_traits, trait->id_trait_node_entry ) && !player->sim->enable_all_talents )
   {
     rank = 0U;
@@ -12095,7 +12121,7 @@ std::unique_ptr<expr_t> player_t::create_expression( util::string_view expressio
       if ( auto id = trait_data_t::get_hero_tree_id( splits[ 1 ] ) )
       {
         // check hash-activated hero trees
-        if ( range::contains( player_sub_trees, id ) )
+        if ( player_sub_trees.count( id ) )
           return expr_t::create_constant( expression_str, 1 );
 
         // check manually added hero talents
@@ -12118,6 +12144,16 @@ std::unique_ptr<expr_t> player_t::create_expression( util::string_view expressio
   {
     if ( splits[ 0 ] == "buff" || splits[ 0 ] == "debuff" )
     {
+      // Universal PvP rules aura check, primarily used in Blizzard rotations
+      if ( splits[ 1 ] == "pvp_rules_enabled_hardcoded" )
+      {
+        if ( splits[ 2 ] == "up" )
+          return expr_t::create_constant( "pvp_enabled", as<double>( sim->pvp_rules && sim->pvp_rules->ok() ) );
+        else if ( splits[ 2 ] == "down" )
+          return expr_t::create_constant( "pvp_disabled", as<double>( !sim->pvp_rules || !sim->pvp_rules->ok() ) );
+        throw std::invalid_argument( fmt::format( "Invalid PvP rule check '{}.{}'.", splits[ 1 ], splits[ 2 ] ) );
+      }
+
       // buff.buff_name.buff_property
       get_target_data( this );
       buff_t* buff = buff_t::find_expressable( buff_list, splits[ 1 ], this );
@@ -13143,6 +13179,7 @@ void player_t::create_options()
 
   // Set Bonus
   add_option( opt_func( "set_bonus", parse_set_bonus ) );
+  add_option( opt_append( "set_bonus+", set_bonus_str ) );
 
   // Gear Stats
   add_option( opt_float( "gear_strength", gear.attribute[ ATTR_STRENGTH ] ) );

@@ -1706,7 +1706,6 @@ public:
     propagate_const<proc_t*> fw_abomination;
     propagate_const<proc_t*> fw_legion_of_souls;  // Legion of Souls talent
     propagate_const<proc_t*> fw_desecrate;
-    propagate_const<proc_t*> fw_soul_reaper;
 
     // Festering Wound consumed by
     propagate_const<proc_t*> fw_apocalypse;
@@ -2944,6 +2943,7 @@ struct base_ghoul_pet_t : public death_knight_pet_t
   timespan_t stun_duration;
   double spawn_distance;
   double spawn_radius;
+  bool army_ghoul;
   base_ghoul_pet_t( death_knight_t* owner, std::string_view name, bool guardian = false, bool dynamic = true )
     : death_knight_pet_t( owner, name, guardian, true, dynamic ),
       stun_duration( 4.5_s ),
@@ -2954,12 +2954,18 @@ struct base_ghoul_pet_t : public death_knight_pet_t
     main_hand_weapon.type       = WEAPON_BEAST;
     stun_duration               = dk()->pet_spell.pet_stun->duration();
     spawn_radius                = dk()->spell.apocalypse_duration->effectN( 1 ).radius();
+    army_ghoul                  = name_str == "army_ghoul";
   }
 
   void init_finished() override
   {
     death_knight_pet_t::init_finished();
-    buffs.stunned->set_expire_callback( [ & ]( buff_t*, int, timespan_t ) { trigger_pet_movement( spawn_distance ); } );
+    buffs.stunned->set_expire_callback( [ & ]( buff_t*, int, timespan_t d ) {
+      if ( !sim->event_mgr.canceled && d == timespan_t::zero() )
+      {
+        trigger_pet_movement( spawn_distance );
+      }
+    } );
   }
 
   attack_t* create_main_hand_auto_attack() override
@@ -2970,6 +2976,8 @@ struct base_ghoul_pet_t : public death_knight_pet_t
   void init_base_stats() override
   {
     death_knight_pet_t::init_base_stats();
+
+    ready_type = ready_e::READY_TRIGGER;
 
     resources.base[ RESOURCE_ENERGY ]                  = 100;
     resources.base_regen_per_second[ RESOURCE_ENERGY ] = 10;
@@ -2993,16 +3001,13 @@ struct base_ghoul_pet_t : public death_knight_pet_t
   void arise() override
   {
     death_knight_pet_t::arise();
+
     double dist    = precombat_spawn ? 0 : rng().range( -spawn_radius, spawn_radius );
     spawn_distance = std::max( 0.0, dk()->base.distance + dist );
-    if ( name_str == "army_ghoul" )
-    {
+    if ( army_ghoul )
       trigger_summon_stun( stun_duration );
-    }
     else
-    {
       trigger_pet_movement( spawn_distance );
-    }
   }
 
   resource_e primary_resource() const override
@@ -3015,19 +3020,18 @@ struct base_ghoul_pet_t : public death_knight_pet_t
     if ( is_moving() )
       return time_to_move();
 
-    double energy = resources.current[ RESOURCE_ENERGY ];
-    timespan_t time_to_next =
-        timespan_t::from_seconds( ( 40 - energy ) / resource_regen_per_second( RESOURCE_ENERGY ) );
+    if ( buffs.stunned->check() )
+      return buffs.stunned->remains();
 
-    // Cheapest Ability need 40 Energy
-    if ( energy > 40 )
-    {
-      return 100_ms;
-    }
-    else
-    {
-      return std::max( time_to_next, 100_ms );
-    }
+    double energy = resources.current[ RESOURCE_ENERGY ];
+
+    if ( energy >= resource_thresholds.front() )
+      return death_knight_pet_t::available();
+
+    timespan_t time_to_next = timespan_t::from_seconds( ( resource_thresholds.front() - energy ) /
+                                                        resource_regen_per_second( RESOURCE_ENERGY ) );
+
+    return std::max( time_to_next, death_knight_pet_t::available() );
   }
 };
 
@@ -3219,15 +3223,15 @@ struct ghoul_pet_t final : public base_ghoul_pet_t
     action_priority_list_t* def = get_action_priority_list( "default" );
     if ( dk()->talent.unholy.dark_transformation.ok() )
     {
-      def->add_action( "sweeping_claws" );
-      def->add_action( "claw,if=energy>70" );
+      def->add_action( "gnaw" );
       def->add_action( "monstrous_blow" );
-      def->add_action( "Gnaw" );
+      def->add_action( "sweeping_claws" );
+      def->add_action( "claw" );
     }
     else
     {
-      def->add_action( "claw,if=energy>70" );
-      def->add_action( "Gnaw" );
+      def->add_action( "gnaw" );
+      def->add_action( "claw" );
     }
   }
 
@@ -3489,7 +3493,6 @@ struct risen_skulker_pet_t : public death_knight_pet_t
     {
       background = true;
       repeating  = true;
-      parse_effects( p->blighted_arrow_aoe_buff );
     }
 
     void schedule_execute( action_state_t* state ) override
@@ -3503,8 +3506,16 @@ struct risen_skulker_pet_t : public death_knight_pet_t
     void execute() override
     {
       was_instant = false;
+
+      if ( pet()->blighted_arrow_aoe_buff->check() )
+        aoe = pet()->blighted_arrow_aoe_buff->data().effectN( 1 ).base_value();
+      else
+        aoe = 0;
+
       pet_spell_t::execute();
+
       pet()->blighted_arrow_aoe_buff->decrement();
+
       if ( pet()->blighted_arrow_st_buff->check() )
       {
         was_instant = true;
@@ -4703,11 +4714,11 @@ struct trollbane_pet_t final : public horseman_pet_t
 
     void execute() override
     {
-      if (consumed_km)
+      if ( dk()->main_hand_weapon.group() == WEAPON_2H && consumed_km )
         set_school_override( SCHOOL_FROST );
       horseman_melee_t::execute();
 
-      if (consumed_km)
+      if ( dk()->main_hand_weapon.group() == WEAPON_2H && consumed_km )
         clear_school_override();
       
       consumed_km = false;
@@ -4737,6 +4748,8 @@ struct trollbane_pet_t final : public horseman_pet_t
       base_multiplier     = dk()->spell.tww3_4pc_rider->effectN( 1 ).percent();
       aoe = -1;
       reduced_aoe_targets = data().effectN( 5 ).base_value();
+      background          = true;
+      _player = dk();
     }
   };
 
@@ -4775,7 +4788,7 @@ struct trollbane_pet_t final : public horseman_pet_t
 
 public:
   obliterate_background_trollbane_t* obliterate;
-  frostscythe_trollbane_t* frostscythe;
+  action_t* frostscythe;
 };
 
 // ==========================================================================
@@ -4984,7 +4997,7 @@ struct death_knight_action_t : public parse_action_effects_t<Base>
   } affected_by;
 
   death_knight_action_t( std::string_view n, death_knight_t* p, const spell_data_t* s = spell_data_t::nil() )
-    : action_base_t( n, p, s ), gain( nullptr ), hasted_gcd( false ), rp_per_tick( 0 ), affected_by{ false }
+    : action_base_t( n, p, s ), gain( nullptr ), hasted_gcd( false ), rp_per_tick( 0 ), affected_by{ false, false }
   {
     this->may_glance = false;
     if ( this->cooldown->duration > 0_s )
@@ -9343,7 +9356,9 @@ struct frostscythe_t : public frostscythe_base_t
 
     if ( p()->sets->has_set_bonus( HERO_RIDER_OF_THE_APOCALYPSE, TWW3, B4 ) &&
          p()->pets.trollbane.active_pet() != nullptr )
-      p()->pets.trollbane.active_pet()->frostscythe->execute_on_target( target );
+      // 11.2 TODO check delays again between patch launch and season launch
+      make_event<delayed_execute_event_t>( *sim, p(), p()->pets.trollbane.active_pet()->frostscythe,
+                                           execute_state->target, p()->rng().gauss( 200_ms, 50_ms ) );
 
     if ( p()->buffs.exterminate->up() )
     {
@@ -9562,11 +9577,11 @@ struct frost_strike_t final : public death_knight_melee_attack_t
       oh( p->background_actions.frost_strike_offhand ),
       mh_sb( p->background_actions.frost_strike_sb_main ),
       oh_sb( p->background_actions.frost_strike_sb_offhand ),
+      frostbane( new frostbane_t( "frostbane", p ) ),
+      frostreaper( p->background_actions.frostreaper ),
       mh_delay( 0_ms ),
       oh_delay( 0_ms ),
-      sb( false ),
-      frostbane( new frostbane_t( "frostbane", p ) ),
-      frostreaper( p->background_actions.frostreaper )
+      sb( false )
   {
     parse_options( options_str );
 
@@ -11318,14 +11333,6 @@ struct soul_reaper_action_t final : public soul_reaper_t
     }
   }
 
-  void impact( action_state_t* s ) override
-  {
-    soul_reaper_t::impact( s );
-    // Not mentioned in patch notes anywhere, nor in data anywhere. Assuming this is a bug for now.
-    if ( p()->talent.unholy.reaping.ok() && p()->bugs && s->target->health_percentage() < data().effectN( 3 ).base_value() )
-      p()->trigger_festering_wound( s, 1, p()->procs.fw_soul_reaper );
-  }
-
   double composite_energize_amount( const action_state_t* s ) const override
   {
     double c = death_knight_melee_attack_t::composite_energize_amount( s );
@@ -12042,7 +12049,7 @@ void runeforge::sanguination( special_effect_t& effect )
 
   struct sanguination_heal_t final : public heal_t
   {
-    sanguination_heal_t( std::string_view name, player_t* p, special_effect_t& effect )
+    sanguination_heal_t( std::string_view /* name */, player_t* p, special_effect_t& effect )
       : heal_t( "rune_of_sanguination", p, effect.driver()->effectN( 1 ).trigger() )
     {
       background                      = true;
@@ -12531,7 +12538,7 @@ void death_knight_t::consume_killing_machine( proc_t* proc, timespan_t total_del
       {
         // Arctic Assault fires on a delay after consuming Killing Machine.
         // Uncertain from logs if its tied to the Obliterate execute or the consumption, leaving it here for now.
-        make_event( *sim, 500_ms, [ this, aa_action ]() {
+        make_event( *sim, 500_ms, [ aa_action ]() {
           aa_action->execute();
         } );
       }
@@ -14640,6 +14647,7 @@ void death_knight_t::init_blizzard_action_list()
       break;
     case DEATH_KNIGHT_FROST:
       cooldowns->add_action( "breath_of_sindragosa" );
+      cooldowns->add_action( "raise_dead" );
       break;
     case DEATH_KNIGHT_UNHOLY:
       cooldowns->add_action( "raise_abomination" );
@@ -15536,7 +15544,6 @@ void death_knight_t::init_procs()
   procs.fw_abomination      = get_proc( "Festering Wound from Abomination" );
   procs.fw_legion_of_souls  = get_proc( "Festering Wound from Legion of Souls" );
   procs.fw_desecrate        = get_proc( "Festering Wound from Desecrate" );
-  procs.fw_soul_reaper      = get_proc( "Festering Wound from Soul Reaper" );
 
   procs.fw_apocalypse         = get_proc( "Festering Wound Burst by Apocalypse" );
   procs.fw_death              = get_proc( "Festering Wound Burst by Target Death" );
@@ -15732,10 +15739,7 @@ bool death_knight_t::validate_actor()
 {
   if ( talent.frost.frostbane.ok() )
   {
-    sim->error( "****** UNRELIABLE SIM ****** UNRELIABLE SIM ****** UNRELIABLE SIM ******" );
-    sim->error( "!! The precise proc chance of Frostbane is unknown.    !!" );
-    sim->error( "!! Results will be incorrect.                                         !!" );
-    sim->error( "****** UNRELIABLE SIM ****** UNRELIABLE SIM ****** UNRELIABLE SIM ******" );
+    sim->error( error_level_e::SEVERE, "The precise proc chance of Frostbane is unknown. Results will be incorrect." );
   }
 
   return true;
@@ -16149,6 +16153,9 @@ void pets::pet_action_t<T_PET, Base>::apply_pet_action_effects()
 
   // Frost
   parse_effects( dk()->mastery.frozen_heart );
+  parse_effects( dk()->buffs.remorseless_winter, dk()->talent.cleaving_strikes );  // Affects Trollbane's Frostscythe
+  parse_effects( dk()->buffs.frozen_dominion_remorseless_winter, dk()->talent.cleaving_strikes );
+  parse_effects( dk()->buffs.killing_machine, dk()->talent.frost.killing_streak );
 
   // Unholy
   parse_effects( dk()->buffs.unholy_assault );
@@ -16156,7 +16163,7 @@ void pets::pet_action_t<T_PET, Base>::apply_pet_action_effects()
 
   // Rider of the Apocalypse
   parse_effects( dk()->buffs.mograines_might );
-  parse_effects( dk()->buffs.a_feast_of_souls );
+  parse_effects( dk()->buffs.a_feast_of_souls ); 
   auto tww3_rider_mask = effect_mask_t( true );
   switch ( dk()->specialization() )
   {
@@ -16688,7 +16695,7 @@ private:
 
 namespace live_death_knight
 {
-#include "class_modules/sc_death_knight_live.inc"
+// #include "class_modules/sc_death_knight_live.inc"
 }
 
 // DEATH_KNIGHT MODULE INTERFACE ============================================
@@ -16701,20 +16708,9 @@ struct death_knight_module_t : public module_t
 
   player_t* create_player( sim_t* sim, std::string_view name, race_e r = RACE_NONE ) const override
   {
-    // TODO 11.2 Remove PTR check
-    if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
-    {
-      auto p              = new death_knight_t( sim, name, r );
-      p->report_extension = std::unique_ptr<player_report_extension_t>( new death_knight_report_t( *p ) );
-      return p;
-    }
-    else
-    {
-      auto p = new live_death_knight::death_knight_t( sim, name, r );
-      p->report_extension =
-          std::unique_ptr<player_report_extension_t>( new live_death_knight::death_knight_report_t( *p ) );
-      return p;
-    }
+    auto p              = new death_knight_t( sim, name, r );
+    p->report_extension = std::unique_ptr<player_report_extension_t>( new death_knight_report_t( *p ) );
+    return p;
   }
 
   void static_init() const override

@@ -73,8 +73,8 @@ static damage_affected_by parse_damage_affecting_aura( action_t* a, spell_data_p
     if ( effect.type() != E_APPLY_AURA )
       continue;
 
-    if ( effect.subtype() == A_MOD_DAMAGE_FROM_CASTER_SPELLS && a->data().affected_by( effect ) ||
-      effect.subtype() == A_MOD_DAMAGE_FROM_CASTER_SPELLS_LABEL && a->data().affected_by_label( effect ) )
+    if ( ( effect.subtype() == A_MOD_DAMAGE_FROM_CASTER_SPELLS && a->data().affected_by( effect ) ) ||
+         ( effect.subtype() == A_MOD_DAMAGE_FROM_CASTER_SPELLS_LABEL && a->data().affected_by_label( effect ) ) )
     {
       affected_by.direct = as<uint8_t>( effect.spell_effect_num() + 1 );
       affected_by.tick   = as<uint8_t>( effect.spell_effect_num() + 1 );
@@ -82,9 +82,9 @@ static damage_affected_by parse_damage_affecting_aura( action_t* a, spell_data_p
 
       return affected_by;
     }
-    
-    if ( effect.subtype() == A_ADD_PCT_MODIFIER && a->data().affected_by( effect ) ||
-      effect.subtype() == A_ADD_PCT_LABEL_MODIFIER && a->data().affected_by_label( effect ) )
+
+    if ( ( effect.subtype() == A_ADD_PCT_MODIFIER && a->data().affected_by( effect ) ) ||
+         ( effect.subtype() == A_ADD_PCT_LABEL_MODIFIER && a->data().affected_by_label( effect ) ) )
     {
       if ( effect.misc_value1() == P_GENERIC )
       {
@@ -4376,6 +4376,7 @@ struct explosive_shot_base_t : public hunter_ranged_attack_t
 
   timespan_t grenade_juggler_reduction = 0_s;
   damage_t* explosion = nullptr;
+  bool triggers_shrapnel_shot_lnl = true;
 
   explosive_shot_base_t( util::string_view n, hunter_t* p, const spell_data_t* s ) : hunter_ranged_attack_t( n, p, s )
   {
@@ -4468,8 +4469,11 @@ struct explosive_shot_base_t : public hunter_ranged_attack_t
     p()->cooldowns.wildfire_bomb->adjust( -grenade_juggler_reduction );
     p()->buffs.bombardier->decrement();
 
-    if ( p()->talents.shrapnel_shot.ok() )
+    if ( triggers_shrapnel_shot_lnl && p()->talents.shrapnel_shot.ok() )
+    {
       p()->buffs.lock_and_load->trigger();
+      p()->cooldowns.aimed_shot->reset( false );
+    }
   }
 
   double cost_pct_multiplier() const override
@@ -4855,9 +4859,9 @@ struct black_arrow_t final : public kill_shot_base_t
   double upper_health_threshold_pct;
 
   black_arrow_t( hunter_t* p, util::string_view options_str ) : kill_shot_base_t( "black_arrow", p, p->talents.black_arrow_spell ),
+    dot( p->get_background_action<black_arrow_dot_t>( "black_arrow_dot" ) ),
     lower_health_threshold_pct( data().effectN( 2 ).base_value() ),
-    upper_health_threshold_pct( data().effectN( 3 ).base_value() ),
-    dot( p->get_background_action<black_arrow_dot_t>( "black_arrow_dot" ) )
+    upper_health_threshold_pct( data().effectN( 3 ).base_value() )
   {
     parse_options( options_str );
 
@@ -5143,7 +5147,7 @@ struct stampede_t : hunter_ranged_attack_t
   {
     damage_t( util::string_view n, hunter_t* p ) : hunter_ranged_attack_t( n, p, p->tier_set.tww_s3_pack_leader_4pc_stampede_damage )
     {
-      aoe = as<int>( p->tier_set.tww_s3_pack_leader_4pc->effectN( 3 ).base_value() );
+      aoe = p->bugs ? -1 : as<int>( p->tier_set.tww_s3_pack_leader_4pc->effectN( 3 ).base_value() );
       background = dual = true;
     }
   };
@@ -5728,7 +5732,10 @@ struct aimed_shot_t : public aimed_shot_base_t
 
   struct explosive_shot_tww_s2_mm_4pc_t : public explosive_shot_background_t
   {
-    explosive_shot_tww_s2_mm_4pc_t( util::string_view n, hunter_t* p ) : explosive_shot_background_t( n, p ) {}
+    explosive_shot_tww_s2_mm_4pc_t( util::string_view n, hunter_t* p ) : explosive_shot_background_t( n, p )
+    {
+      triggers_shrapnel_shot_lnl = false;
+    }
 
     double composite_persistent_multiplier( const action_state_t *state ) const override
     {
@@ -5863,6 +5870,10 @@ struct aimed_shot_t : public aimed_shot_base_t
     if ( double_tap && p()->buffs.double_tap->up() )
     {
       double_tap->execute_on_target( target );
+      
+      if ( aspect_of_the_hydra && tl.size() > 1 )
+        aspect_of_the_hydra->execute_on_target( tl[ 1 ] );
+
       p()->buffs.double_tap->expire();
     }
 
@@ -5870,11 +5881,10 @@ struct aimed_shot_t : public aimed_shot_base_t
     {
       p()->buffs.lock_and_load->decrement();
       p()->cooldowns.explosive_shot->adjust( -p()->talents.magnetic_gunpowder->effectN( 2 ).time_value() );
-    }
 
-    // The Explosive Shot can trigger Lock and Load with Shrapnel Shot.
-    if ( lock_and_loaded && tww_s2_mm_4pc )
-      tww_s2_mm_4pc->execute_on_target( target );
+      if ( tww_s2_mm_4pc )
+        tww_s2_mm_4pc->execute_on_target( target );
+    }
 
     lock_and_loaded = false;
   }
@@ -8032,7 +8042,7 @@ action_t* hunter_t::create_action( util::string_view name, util::string_view opt
       return new arcane_shot_t( this, options_str );
   }
 
-  if ( name == "kill_shot" )
+  if ( name == "kill_shot" || name == "black_arrow" )
   {
     if ( talents.black_arrow.ok() )
       return new black_arrow_t( this, options_str );
@@ -9012,7 +9022,8 @@ void hunter_t::create_buffs()
 
   buffs.eyes_closed = make_buff( this, "eyes_closed", talents.eyes_closed->effectN( 1 ).trigger() );
 
-  buffs.lunar_storm_ready = make_buff( this, "lunar_storm_ready", talents.lunar_storm_ready_buff );
+  buffs.lunar_storm_ready = make_buff( this, "lunar_storm_ready", talents.lunar_storm_ready_buff )
+    ->set_constant_behavior( buff_constant_behavior::NEVER_CONSTANT );
   
   buffs.lunar_storm_cooldown = make_buff( this, "lunar_storm_cooldown", talents.lunar_storm_cooldown_buff )
     ->set_stack_change_callback(
@@ -9796,10 +9807,8 @@ void hunter_t::create_options()
   player_t::create_options();
 
   add_option( opt_string( "summon_pet", options.summon_pet_str ) );
-  add_option( opt_timespan( "hunter.pet_attack_speed", options.pet_attack_speed,
-                            0.5_s, 4_s ) );
-  add_option( opt_timespan( "hunter.pet_basic_attack_delay", options.pet_basic_attack_delay,
-                            0_ms, 0.6_s ) );
+  add_option( opt_timespan( "hunter.pet_attack_speed", options.pet_attack_speed, 0.5_s, 4_s ) );
+  add_option( opt_timespan( "hunter.pet_basic_attack_delay", options.pet_basic_attack_delay, 0_ms, 0.6_s ) );
   add_option( opt_bool( "max_prio_damage", options.max_prio_damage ) );
 }
 

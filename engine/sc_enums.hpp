@@ -279,7 +279,7 @@ enum player_e
   PLAYER_MAX
 };
 
-enum hero_talent_e
+enum hero_tree_e
 {
   HERO_NONE                      = 0,
   HERO_VOIDWEAVER                = 18,
@@ -1521,4 +1521,12 @@ enum trait_definition_op : int
   TRAIT_OP_NONE = -1,
   TRAIT_OP_SET,
   TRAIT_OP_MUL
+};
+
+// sim_t::error() severity level
+enum error_level_e : unsigned short
+{
+  TRIVIAL,
+  MODERATE,
+  SEVERE
 };

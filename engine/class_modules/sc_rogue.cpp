@@ -280,6 +280,9 @@ public:
 
 class rogue_t : public player_t
 {
+  // Ready trigger energy threshold
+  double rogue_ready_trigger_threshold;
+
 public:
   // Shadow Techniques swing counter;
   unsigned shadow_techniques_counter;
@@ -1213,6 +1216,7 @@ public:
 
   rogue_t( sim_t* sim, util::string_view name, race_e r = RACE_NIGHT_ELF ) :
     player_t( sim, ROGUE, name, r ),
+    rogue_ready_trigger_threshold( 25 ),
     shadow_techniques_counter( 0 ),
     deathstalkers_mark_debuff( nullptr ),
     auto_attack( nullptr ), melee_main_hand( nullptr ), melee_off_hand( nullptr ),
@@ -1287,6 +1291,7 @@ public:
   void        copy_from( player_t* source ) override;
   std::string create_profile( save_e stype ) override;
   void        init_action_list() override;
+  void        init_blizzard_action_list() override;
   std::vector<std::string> action_names_from_spell_id( unsigned int spell_id ) const override;
   parsed_assisted_combat_rule_t parse_assisted_combat_rule( const assisted_combat_rule_data_t& rule,
                                                             const assisted_combat_step_data_t& step ) const override;
@@ -1872,6 +1877,7 @@ public:
     if ( p->talent.assassination.zoldyck_recipe->ok() )
     {
       // Not in spell data. Using the mastery whitelist as a baseline, most seem to apply (including VV)
+      // 2025-08-03 -- Effect 4 with the plague damage talents is, as only Corrupt the Blood appears to work
       affected_by.zoldyck_insignia = ab::data().affected_by( p->mastery.potent_assassin->effectN( 1 ) ) ||
                                      ab::data().affected_by( p->mastery.potent_assassin->effectN( 2 ) ) ||
                                      ab::data().affected_by_label( p->mastery.potent_assassin->effectN( 3 ) );
@@ -3609,9 +3615,10 @@ struct melee_t : public rogue_attack_t
 
     // Class Passives
     m *= 1.0 + p()->spec.assassination_rogue->effectN( 22 ).percent();
-    m *= 1.0 + p()->spec.assassination_rogue->effectN( 23 ).percent();
+    m *= 1.0 + p()->spec.assassination_rogue->effectN( 23 ).percent(); // Non-PvP
     m *= 1.0 + p()->spec.outlaw_rogue->effectN( 18 ).percent();
     m *= 1.0 + p()->spec.subtlety_rogue->effectN( 11 ).percent();
+    m *= 1.0 + p()->spec.subtlety_rogue->effectN( 18 ).percent(); // Non-PvP
 
     return m;
   }
@@ -4269,15 +4276,6 @@ struct cold_blood_t : public rogue_spell_t
     rogue_spell_t::execute();
     p()->buffs.cold_blood->trigger();
   }
-
-  bool ready() override
-  {
-    // Cooldown does not start in-game until the buff is entirely consumed
-    if ( p()->buffs.cold_blood->check() )
-      return false;
-
-    return rogue_spell_t::ready();
-  }
 };
 
 // Crimson Tempest ==========================================================
@@ -4570,7 +4568,7 @@ struct envenom_t : public rogue_attack_t
     // 2025-05-12 -- Envenom with Twist the Knife pandemics based on the stack it is replacing if at max stacks
     //               Needs custom duration because pandemics on async buffs is not supported in the core
     if ( p()->buffs.envenom->stack_behavior == buff_stack_behavior::ASYNCHRONOUS &&
-         p()->buffs.envenom->expiration.size() == p()->buffs.envenom->max_stack() )
+         p()->buffs.envenom->expiration.size() == as<size_t>( p()->buffs.envenom->max_stack() ) )
     {
       auto current_remains = p()->buffs.envenom->expiration.front()->occurs() - sim->current_time();
       auto residual = std::min( envenom_duration * 0.3, current_remains );
@@ -5058,7 +5056,6 @@ struct killing_spree_tick_t : public rogue_attack_t
   killing_spree_tick_t( util::string_view name, rogue_t* p, const spell_data_t* s ) :
     rogue_attack_t( name, p, s )
   {
-    direct_tick = true;
   }
 
   void impact( action_state_t* state ) override
@@ -5093,11 +5090,11 @@ struct killing_spree_t : public rogue_attack_t
     attack_mh( nullptr ), attack_oh( nullptr )
   {
     channeled = tick_zero = true;
-    interrupt_auto_attack = p->is_ptr(); // 2025-06-28 -- TOCHECK: Auto attacks are now interrupted on PTR
+    interrupt_auto_attack = true; // 2025-06-28 -- TOCHECK: Auto attacks are now interrupted on PTR
 
     // Assume we can react to the ending of Killing Spree faster than the 250ms channel_lag setting
     // through the use of [nochannel] macros, or in some cases reacting to the combo point generation
-    // to cancel early it with another action
+    // to cancel it early with another action
     ability_lag = p->world_lag;
 
     attack_mh = p->get_background_action<killing_spree_tick_t>( "killing_spree_mh", p->spec.killing_spree_mh_attack );
@@ -5105,7 +5102,7 @@ struct killing_spree_t : public rogue_attack_t
     add_child( attack_mh );
     add_child( attack_oh );
 
-    snapshot_flags |= STATE_HASTE;
+    snapshot_flags |= STATE_HASTE; // Core handling of this fails even though it is channeled due to no base dot_duration
   }
 
   void init() override
@@ -5152,8 +5149,8 @@ struct killing_spree_t : public rogue_attack_t
 
     // 06-28-2025 -- TOCHECK: On 11.2 PTR both hits target random enemies
     // Additionally, the new damage spell 1248604 is not currently being used but contains the 0-9 yard cone
-    attack_mh->execute_on_target( p()->is_ptr() ? rng().range( sim->target_non_sleeping_list ) : d->target );
-    attack_oh->execute_on_target( p()->is_ptr() ? rng().range( sim->target_non_sleeping_list ) : d->target );
+    attack_mh->execute_on_target( rng().range( sim->target_non_sleeping_list ) );
+    attack_oh->execute_on_target( rng().range( sim->target_non_sleeping_list ) );
 
     if ( p()->spec.killing_spree_energize->ok() && d->current_tick > 0 )
     {
@@ -7113,6 +7110,7 @@ struct corrupt_the_blood_t : public rogue_attack_t
   corrupt_the_blood_t( util::string_view name, rogue_t* p ) :
     rogue_attack_t( name, p, p->spell.corrupt_the_blood_damage )
   {
+    affected_by.zoldyck_insignia = true; // 2025-03-05 -- Confirmed to work via testing
   }
 
   double composite_da_multiplier( const action_state_t* state ) const override
@@ -7398,11 +7396,10 @@ struct coup_de_grace_t : public rogue_attack_t
     {
       double m = rogue_attack_t::composite_da_multiplier( state );
 
-      // 2025-07-14 -- TOCHECK: 4pc damage bonus applies to the first Coup de Grace instead of the second
-      //               Also does not apply to Shadowed Finishers
-      if ( p()->set_bonuses.tww3_trickster_4pc->ok() && p()->buffs.tww3_trickster_4pc->check() )
+      // 2025-07-31 -- TOCHECK: 4pc damage bonus does not apply to Shadowed Finishers
+      if ( p()->set_bonuses.tww3_trickster_4pc->ok() && !p()->buffs.tww3_trickster_4pc->check() )
       {
-        m *= p()->buffs.tww3_trickster_4pc->value();
+        m *= p()->buffs.tww3_trickster_4pc->default_value;
       }
 
       return m;
@@ -9712,6 +9709,13 @@ void actions::rogue_action_t<Base>::trigger_nimble_flurry( const action_state_t*
     return;
 
   double multiplier = p()->talent.trickster.nimble_flurry->effectN( 3 ).percent();
+
+  // 2025-08-02 -- Not yet in spell data descriptions, but in patch notes and appears to work
+  if ( p()->buffs.shadow_blades->check() )
+  {
+    multiplier *= 1.0 + p()->buffs.shadow_blades->check_value();
+  }
+
   p()->active.trickster.nimble_flurry->trigger_residual_action( state, multiplier );
 }
 
@@ -10262,24 +10266,27 @@ std::vector<std::string> rogue_t::action_names_from_spell_id( unsigned int spell
   auto splits = util::string_split( util::tokenize_fn( name ), "_" );
   auto fragment = !splits.empty() ? splits[ 0 ] : "";
 
-  std::string type = "";
+  std::string poison_type = "";
   switch ( spell_id )
   {
   case 2823:   // deadly poison
   case 315584: // instant poison
   case 381664: // amplifying poison
   case 8679:   // wound poison
-    type = "lethal";
+    poison_type = "lethal";
+    break;
   case 381637: // atrophic poison
   case 3408:   // crippling poison
   case 5761:   // numbing poison
-    type = "nonlethal";
+    poison_type = "nonlethal";
+    break;
   default:
     break;
   }
 
-  if ( !type.empty() )
-    return { fmt::format( "apply_poison,{}={}", type, fragment ) };
+  // Just return nothing for apply_poison for now because the conditions are nonsense
+  if ( !poison_type.empty() )
+    return {}; // return { fmt::format( "apply_poison,{}={}", type, fragment ) };
 
   if ( spell_id == 196819 && specialization() == ROGUE_OUTLAW )
     return { "dispatch", "coup_de_grace" };
@@ -10288,10 +10295,16 @@ std::vector<std::string> rogue_t::action_names_from_spell_id( unsigned int spell
   if ( spell_id == 196819 && specialization() == ROGUE_ASSASSINATION )
     return { "envenom", "coup_de_grace" };
 
+  if ( spell_id == 1752 && specialization() == ROGUE_ASSASSINATION )
+    return { "mutilate" };
+  if ( spell_id == 1752 && specialization() == ROGUE_SUBTLETY )
+    return { "backstab", "gloomblade" };
+
   return player_t::action_names_from_spell_id( spell_id );
 }
 
 // rogue_t::action_names_from_spell_id ====================================================
+
 parsed_assisted_combat_rule_t rogue_t::parse_assisted_combat_rule( const assisted_combat_rule_data_t& rule,
                                                                    const assisted_combat_step_data_t& step ) const
 {
@@ -10314,6 +10327,20 @@ parsed_assisted_combat_rule_t rogue_t::parse_assisted_combat_rule( const assiste
     }
   }
 
+  if ( rule.condition_type == TARGET_COUNT_NEAR_TARGET_GREATER ||
+       rule.condition_type == TARGET_COUNT_NEAR_PLAYER_GREATER )
+    return fmt::format( "active_enemies>={}", rule.condition_value_1 );
+
+  if ( rule.condition_type == COMBO_POINTS_GREATER )
+    return fmt::format( "effective_combo_points>={}", rule.condition_value_1 );
+
+  if ( rule.condition_type == COMBO_POINTS_LESS )
+    return fmt::format( "effective_combo_points<={}", rule.condition_value_1 );
+
+  // Stealth + Vanish checks
+  if ( rule.condition_type == AURA_ON_PLAYER && ( rule.condition_value_1 == 1784 || rule.condition_value_1 == 115191 || rule.condition_value_1 == 11327 ) )
+    return { "stealthed.basic", "Generic stealth check replacement expression for multiple buff checks", true, false };
+
   if ( rule.condition_type == AURA_ON_PLAYER && rule.condition_value_1 == 51667 )
     return { "1", "Checks if the automatically learned passive Cut to the Chase is known. Assumed to be strictly true." };
 
@@ -10324,6 +10351,40 @@ parsed_assisted_combat_rule_t rogue_t::parse_assisted_combat_rule( const assiste
     return "action.coup_de_grace.ready";
 
   return player_t::parse_assisted_combat_rule( rule, step );
+}
+
+// rogue_t::init_blizzard_action_list =====================================================
+
+void rogue_t::init_blizzard_action_list()
+{
+  player_t::init_blizzard_action_list();
+
+  // Replacement for Blizzard's nonsensical apply_poison logic
+  action_priority_list_t* precombat = get_action_priority_list( "precombat" );
+  precombat->add_action( "apply_poison" );
+
+  if ( use_cds_with_blizzard_action_list )
+  {
+    action_priority_list_t* cooldowns = get_action_priority_list( "cooldowns" );
+
+    switch ( specialization() )
+    {
+      case ROGUE_ASSASSINATION:
+        cooldowns->add_action( "vanish,if=!stealthed.all" );
+        cooldowns->add_action( "deathmark,if=!talent.kingsbane|cooldown.kingsbane.ready" );
+        break;
+      case ROGUE_OUTLAW:
+        cooldowns->add_action( "adrenaline_rush,if=!buff.adrenaline_rush.up" );
+        cooldowns->add_action( "vanish,if=!stealthed.all" );
+        cooldowns->add_action( "keep_it_rolling,if=rtb_buffs>=4" );
+        break;
+      case ROGUE_SUBTLETY:
+        cooldowns->add_action( "shadow_blades,if=buff.shadow_dance.up" );
+        break;
+      default:
+        break;
+    }
+  }
 }
 
 // rogue_t::create_action  ==================================================
@@ -10983,6 +11044,7 @@ void rogue_t::init_base_stats()
   if ( options.rogue_ready_trigger )
   {
     ready_type = READY_TRIGGER;
+    rogue_ready_trigger_threshold = ( specialization() == ROGUE_OUTLAW ) ? 20 : 25;
   }
 }
 
@@ -11217,30 +11279,7 @@ void rogue_t::init_spells()
   talent.outlaw.hidden_opportunity = find_talent_spell( talent_tree::SPECIALIZATION, "Hidden Opportunity" );
   talent.outlaw.crackshot = find_talent_spell( talent_tree::SPECIALIZATION, "Crackshot" );
   talent.outlaw.keep_it_rolling = find_talent_spell( talent_tree::SPECIALIZATION, "Keep it Rolling" );
-  
-  // TODO: ghostly_strike is duplicated in `trait_data_ptr.inc`, making the talent unable to be loaded by name (since there are two `Ghostly Strike` talents!)
-  //  `find_talent_spell` normally uses the id of the first match, but in this case, it's broken, and it's the second match that works. So we do the data
-  //  load manually to prefer the second, functional, talent node.
   talent.outlaw.ghostly_strike = find_talent_spell( talent_tree::SPECIALIZATION, "Ghostly Strike" );
-  if ( specialization() == ROGUE_OUTLAW && !talent.outlaw.ghostly_strike->ok() )
-  {
-    uint32_t class_idx, spec_idx;
-    dbc->spec_idx( ROGUE_OUTLAW, class_idx, spec_idx );
-    auto traits = trait_data_t::find_by_spell( talent_tree::SPECIALIZATION, 196937, class_idx, ROGUE_OUTLAW, dbc->ptr );
-    for ( auto trait : traits )
-    {
-      auto it = range::find_if( player_traits, [ trait ]( const auto& entry ) {
-        return std::get<1>( entry ) == trait->id_trait_node_entry;
-      } );
-
-      if ( it != player_traits.end() && std::get<2>( *it ) != 0U )
-      {
-        talent.outlaw.ghostly_strike = find_talent_spell( trait->id_trait_node_entry );
-        break;
-      }
-    }
-  }
-
   talent.outlaw.greenskins_wickers = find_talent_spell( talent_tree::SPECIALIZATION, "Greenskin's Wickers" );
 
   // Subtlety Talents
@@ -11488,7 +11527,7 @@ void rogue_t::init_spells()
   // TOCHECK -- Killing Spree spell ids could change over 11.2 PTR, new spell 1248604 exists but not used in logs yet
   spec.killing_spree_mh_attack = talent.outlaw.killing_spree->ok() ? find_spell( 57841 ) : spell_data_t::not_found();
   spec.killing_spree_oh_attack = talent.outlaw.killing_spree->ok() ? find_spell( 57842 ) : spell_data_t::not_found();
-  spec.killing_spree_energize = talent.outlaw.killing_spree->ok() && is_ptr() ? find_spell( 1235074 ) : spell_data_t::not_found();
+  spec.killing_spree_energize = talent.outlaw.killing_spree->ok() ? find_spell( 1235074 ) : spell_data_t::not_found();
   spec.opportunity_buff = talent.outlaw.opportunity->ok() ? find_spell( 195627 ) : spell_data_t::not_found();
   spec.sinister_strike_extra_attack = talent.outlaw.opportunity->ok() ? find_spell( 197834 ) : spell_data_t::not_found();
   spec.summarily_dispatched_buff = talent.outlaw.summarily_dispatched->ok() ? find_spell( 386868 ) : spell_data_t::not_found();
@@ -12102,11 +12141,7 @@ void rogue_t::create_buffs()
     ->set_cooldown( timespan_t::zero() )
     ->set_constant_behavior( buff_constant_behavior::NEVER_CONSTANT )
     ->set_duration( sim->max_time / 2 )
-    ->set_initial_stack( buffs.cold_blood->max_stack() )
-    ->set_stack_change_callback( [ this ]( buff_t*, int, int new_ ) {
-      if ( new_ == 0 )
-        cooldowns.cold_blood->start();
-    } );
+    ->set_initial_stack( buffs.cold_blood->max_stack() );
 
   buffs.subterfuge = new buffs::subterfuge_t( this );
 
@@ -12148,28 +12183,13 @@ void rogue_t::create_buffs()
   buffs.fatebound_coin_heads = make_buff<damage_buff_t>( this, "fatebound_coin_heads", spell.fatebound_coin_heads_buff, false );
   if ( spell.fatebound_coin_heads_buff->ok() && spell.fatebound_coin_heads_stacking_buff->ok() )
   {
-    if ( is_ptr() )
-    {
-      // Combine the 2% per additional stack buff (which we use as the stacking base buff) and 8% from initial stack buff (the fatebound_coin_heads_stacking_buff)
-      buffs.fatebound_coin_heads->set_direct_mod( spell.fatebound_coin_heads_buff, 1, spell.fatebound_coin_heads_buff->effectN( 1 ).percent(),
-                                                  1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 1 ).percent() );
-      buffs.fatebound_coin_heads->set_periodic_mod( spell.fatebound_coin_heads_buff, 2, spell.fatebound_coin_heads_buff->effectN( 2 ).percent(),
-                                                    1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 2 ).percent() );
-      buffs.fatebound_coin_heads->set_auto_attack_mod( spell.fatebound_coin_heads_buff, 5, spell.fatebound_coin_heads_buff->effectN( 5 ).percent(),
-                                                       1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 3 ).percent() );
-    }
-    else
-    {
-      // Combine the 1% per additional stack buff (which we use as the stacking base buff) and 3% from initial stack buff (the fatebound_coin_heads_stacking_buff)
-      buffs.fatebound_coin_heads->set_direct_mod( spell.fatebound_coin_heads_buff, 1, spell.fatebound_coin_heads_buff->effectN( 1 ).percent(),
-                                                  1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 1 ).percent() - spell.fatebound_coin_heads_buff->effectN( 1 ).percent() );
-      buffs.fatebound_coin_heads->set_periodic_mod( spell.fatebound_coin_heads_buff, 2, spell.fatebound_coin_heads_buff->effectN( 2 ).percent(),
-                                                    1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 2 ).percent() - spell.fatebound_coin_heads_buff->effectN( 2 ).percent() );
-      // TODO: fatebound_coin_heads_stacking_buff modifies fatebound_coin_heads_buff for the periodic and direct damage effects, but has an inline 3% auto attack damage effect
-      //  Are we getting an extra 1% AA damage for free? We may never know. Assuming we don't for now.
-      buffs.fatebound_coin_heads->set_auto_attack_mod( spell.fatebound_coin_heads_buff, 5, spell.fatebound_coin_heads_buff->effectN( 5 ).percent(),
-                                                       1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 3 ).percent() - spell.fatebound_coin_heads_buff->effectN( 5 ).percent() );
-    }
+    // Combine the 2% per additional stack buff (which we use as the stacking base buff) and 8% from initial stack buff (the fatebound_coin_heads_stacking_buff)
+    buffs.fatebound_coin_heads->set_direct_mod( spell.fatebound_coin_heads_buff, 1, spell.fatebound_coin_heads_buff->effectN( 1 ).percent(),
+                                                1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 1 ).percent() );
+    buffs.fatebound_coin_heads->set_periodic_mod( spell.fatebound_coin_heads_buff, 2, spell.fatebound_coin_heads_buff->effectN( 2 ).percent(),
+                                                  1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 2 ).percent() );
+    buffs.fatebound_coin_heads->set_auto_attack_mod( spell.fatebound_coin_heads_buff, 5, spell.fatebound_coin_heads_buff->effectN( 5 ).percent(),
+                                                      1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 3 ).percent() );
   }
   buffs.fatebound_coin_heads
     ->set_constant_behavior( buff_constant_behavior::NEVER_CONSTANT )
@@ -12507,7 +12527,7 @@ void rogue_t::create_buffs()
     // Buff is active on Coup cast but does not begin counting down until 1s into the cast, effectively adding 1s to its duration
     buffs.tww3_trickster_4pc->set_duration( timespan_t::from_seconds( set_bonuses.tww3_trickster_4pc->effectN( 2 ).base_value() ) + 1_s )
       ->set_default_value_from_effect( 1 ) // Coup de Grace damage multiplier
-      ->set_stack_change_callback( [ this ]( buff_t*, int old_, int new_ ) {
+      ->set_stack_change_callback( [ this ]( buff_t*, int, int new_ ) {
         if ( new_ == 0 )
           buffs.escalating_blade->expire(); // Technically this is the same buff in-game
       } );
@@ -13338,22 +13358,16 @@ void rogue_t::regen( timespan_t periodicity )
 
 timespan_t rogue_t::available() const
 {
-  if ( ready_type != READY_POLL )
-  {
+  if ( ready_type == READY_POLL )
     return player_t::available();
-  }
-  else
-  {
-    double energy = resources.current[ RESOURCE_ENERGY ];
 
-    if ( energy > 25 )
-      return timespan_t::from_seconds( 0.1 );
+  const double energy = resources.current[ RESOURCE_ENERGY ];
+  if ( energy >= rogue_ready_trigger_threshold )
+    return 100_ms;
 
-    return std::max(
-             timespan_t::from_seconds( ( 25 - energy ) / resource_regen_per_second( RESOURCE_ENERGY ) ),
-             timespan_t::from_seconds( 0.1 )
-           );
-  }
+  // TODO -- See if this is improved by considering more regen sources
+  return std::max( 100_ms, timespan_t::from_seconds( ( rogue_ready_trigger_threshold - energy ) /
+                                                     resource_regen_per_second( RESOURCE_ENERGY ) ) );
 }
 
 // rogue_t::convert_hybrid_stat ==============================================
@@ -13364,19 +13378,19 @@ stat_e rogue_t::convert_hybrid_stat( stat_e s ) const
   // for certain specs into the appropriate "basic" stats
   switch ( s )
   {
-  case STAT_STR_AGI_INT:
-  case STAT_AGI_INT:
-  case STAT_STR_AGI:
-    return STAT_AGILITY;
-  // This is a guess at how STR/INT gear will work for Rogues, TODO: confirm
-  // This should probably never come up since rogues can't equip plate, but....
-  case STAT_STR_INT:
-    return STAT_NONE;
-  case STAT_SPIRIT:
+    case STAT_STR_AGI_INT:
+    case STAT_AGI_INT:
+    case STAT_STR_AGI:
+      return STAT_AGILITY;
+      // This is a guess at how STR/INT gear will work for Rogues, TODO: confirm
+      // This should probably never come up since rogues can't equip plate, but....
+    case STAT_STR_INT:
       return STAT_NONE;
-  case STAT_BONUS_ARMOR:
+    case STAT_SPIRIT:
       return STAT_NONE;
-  default: return s;
+    case STAT_BONUS_ARMOR:
+      return STAT_NONE;
+    default: return s;
   }
 }
 
@@ -13411,6 +13425,12 @@ public:
 
   void register_hotfixes() const override
   {
+    // 2025-07-29 -- Fatebound Lucky Coin expires 15s after leaving combat
+    hotfix::register_effect( "Rogue", "2025-07-29", "Fatebound Lucky Coin Expiry", 1156957 )
+        .field( "base_value" )
+        .operation( hotfix::HOTFIX_SET )
+        .modifier( 15 )
+        .verification_value( 10 );
   }
 
   void init( player_t* ) const override {}

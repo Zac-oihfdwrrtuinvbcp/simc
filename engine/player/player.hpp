@@ -115,21 +115,28 @@ struct parsed_assisted_combat_rule_t
   std::string expr;
   std::string comment;
   bool show_diff;
+  bool allow_duplicates;
 
   parsed_assisted_combat_rule_t( const char* expr )
-    : expr( expr ), comment( {} ), show_diff( false ) {}
+    : expr( expr ), comment( {} ), show_diff( false ), allow_duplicates( true ) {}
 
   parsed_assisted_combat_rule_t( std::string expr )
-    : expr( expr ), comment( {} ), show_diff( false ) {}
+    : expr( expr ), comment( {} ), show_diff( false ), allow_duplicates( true ) {}
 
   parsed_assisted_combat_rule_t( std::string expr, bool show_diff )
-    : expr( expr ), comment( {} ), show_diff( show_diff ) {}
+    : expr( expr ), comment( {} ), show_diff( show_diff ), allow_duplicates( true ) {}
 
   parsed_assisted_combat_rule_t( std::string expr, const char* comment )
-    : expr( expr ), comment( comment ), show_diff( true ) {}
+    : expr( expr ), comment( comment ), show_diff( true ), allow_duplicates( true ) {}
 
   parsed_assisted_combat_rule_t( std::string expr, std::string comment, bool show_diff )
-    : expr( expr ), comment( comment ), show_diff( show_diff ) {}
+    : expr( expr ), comment( comment ), show_diff( show_diff ), allow_duplicates( true ) {}
+
+  parsed_assisted_combat_rule_t( std::string expr, const char* comment, bool show_diff, bool allow_duplicates )
+    : expr( expr ), comment( comment ), show_diff( show_diff ), allow_duplicates( allow_duplicates ) {}
+
+  parsed_assisted_combat_rule_t( std::string expr, std::string comment, bool show_diff, bool allow_duplicates )
+    : expr( expr ), comment( comment ), show_diff( show_diff ), allow_duplicates( allow_duplicates ) {}
 
   operator std::string() { return expr; }
 };
@@ -224,10 +231,10 @@ struct player_t : public actor_t
   // Player selected (trait entry id, rank) tuples
   std::vector<std::tuple<talent_tree, unsigned, unsigned>> player_traits;
 
-  // Player activated sub trees
+  // Player activated dbc sub trees ids
   std::set<unsigned> player_sub_trees;
 
-  // Player added sub tree traits that don't require activated sub tree
+  // Player added dbc sub tree traits ids that don't require activated sub tree ids
   std::vector<unsigned> player_sub_traits;
 
   // Profs
@@ -443,6 +450,7 @@ struct player_t : public actor_t
   gear_stats_t gear, enchant; // Option based stats
   gear_stats_t total_gear; // composite of gear, enchant and for non-pets sim -> enchant
   std::unique_ptr<set_bonus_t> sets;
+  std::string set_bonus_str;
   meta_gem_e meta_gem;
   bool matching_gear;
   std::unique_ptr<cooldown_t> item_cooldown;
@@ -960,7 +968,6 @@ public:
   { return name_str.c_str(); }
 
   // Normal methods
-  void init_character_properties();
   double get_stat_value(stat_e);
   void stat_gain( stat_e stat, double amount, gain_t* g = nullptr, action_t* a = nullptr, bool temporary = false );
   void stat_loss( stat_e stat, double amount, gain_t* g = nullptr, action_t* a = nullptr, bool temporary = false );
@@ -993,6 +1000,7 @@ public:
   specialization_e specialization() const
   { return _spec; }
   const char* primary_tree_name() const;
+  bool has_hero_tree( hero_tree_e ) const;
   timespan_t total_reaction_time();
   double avg_item_level() const;
   double get_attribute( attribute_e a ) const;

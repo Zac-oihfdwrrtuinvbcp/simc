@@ -582,7 +582,7 @@ public:
       auto shuffle_attempts = 0U; // Cap shuffle attempts if people use weird options
       bool gap = false;
       do {
-        rng_idx = player->rng().range( 0, entries.size() );
+        rng_idx = player->rng().range( 0U, as<unsigned>( entries.size() ) );
 
         // Ensure that there is enough of a gap (at least max_draw) between the existing successes
         // and the new randomized success position
@@ -6098,8 +6098,8 @@ struct windstrike_t : public stormstrike_base_t
     {
       action_t* spell = nullptr;
 
-      // On PTR (11.2), Tempest overrides the TI primer completely
-      if ( p()->dbc->ptr && p()->buff.tempest->check() )
+      // On 11.2, Tempest overrides the TI primer completely
+      if ( p()->buff.tempest->check() )
       {
         spell = p()->action.tempest_ti;
       }
@@ -7477,10 +7477,19 @@ struct flame_shock_spreader_t : public shaman_spell_t
 
 struct fire_nova_explosion_t : public shaman_spell_t
 {
-  fire_nova_explosion_t( shaman_t* p ) :
-    shaman_spell_t( "fire_nova_explosion", p, p->find_spell( 333977 ) )
+  fire_nova_explosion_t( shaman_t* p, spell_variant type_ ) :
+    shaman_spell_t( "fire_nova_explosion", p, p->find_spell( 333977 ), type_ )
   {
     background = true;
+
+    switch ( type_ )
+    {
+      case spell_variant::TWW3:
+        base_multiplier *= player->sets->set( HERO_TOTEMIC, TWW3, B4 )->effectN( 2 ).percent();
+        break;
+      default:
+        break;
+    }
   }
 
   void init() override
@@ -7500,7 +7509,7 @@ struct fire_nova_t : public shaman_spell_t
     may_crit = may_miss = callbacks = false;
     aoe                             = -1;
 
-    impact_action = new fire_nova_explosion_t( p );
+    impact_action = new fire_nova_explosion_t( p, type_ );
 
     p->flame_shock_dependants.push_back( this );
 
@@ -7511,7 +7520,6 @@ struct fire_nova_t : public shaman_spell_t
       case spell_variant::TWW3:
         background = true;
         cooldown = player->get_cooldown( "fire_nova_tww3" );
-        base_multiplier *= player->sets->set( HERO_TOTEMIC, TWW3, B4 )->effectN( 2 ).percent();
         break;
       default:
         break;
@@ -11320,6 +11328,7 @@ struct tempest_t : public shaman_spell_t
         {
           ws_action->add_child( this );
         }
+        break;
       }
       default:
         affected_by_master_of_the_elements = true;
@@ -11338,17 +11347,8 @@ struct tempest_t : public shaman_spell_t
 
     if ( this->exec_type == spell_variant::THORIMS_INVOCATION )
     {
-      // On PTR (11.2), Tempest is allowed to consume up to 10 charges
-      if ( p()->dbc->ptr )
-      {
-        mw_stacks = std::min( mw_stacks,
-          as<int>( this->p()->talent.thorims_invocation->effectN( 6 ).base_value() ) );
-      }
-      else
-      {
-        mw_stacks = std::min( mw_stacks,
-          as<int>( this->p()->talent.thorims_invocation->effectN( 1 ).base_value() ) );
-      }
+      mw_stacks = std::min( mw_stacks,
+        as<int>( this->p()->talent.thorims_invocation->effectN( 6 ).base_value() ) );
     }
 
     return mw_stacks;
@@ -11896,6 +11896,26 @@ std::unique_ptr<expr_t> shaman_t::create_expression( util::string_view name )
 
   if ( util::str_compare_ci( name, "total_awaken_count" ) )
     return make_fn_expr( name, [ this ]() { return as<double>( aws_counter ); } );
+
+  if ( util::str_compare_ci( name, "dre_proc_left" ) )
+  {
+    return make_fn_expr( name, [ rng = rng_obj.deeply_rooted_elements ]() {
+        return rng->count_remains( SUCCESS );
+    } );
+  }
+
+  if ( util::str_compare_ci( name, "dre_fail_left" ) )
+  {
+    return make_fn_expr( name, [ rng = rng_obj.deeply_rooted_elements ]() {
+        return rng->count_remains( FAIL );
+    } );
+  }
+  if ( util::str_compare_ci( name, "dre_draws_left" ) )
+  {
+    return make_fn_expr( name, [ rng = rng_obj.deeply_rooted_elements ]() {
+        return rng->entry_remains();
+    } );
+  }
 
   if ( util::str_compare_ci( name, "tww3_procs_to_asc" ) )
     return make_fn_expr( name, [ this ]() {
@@ -13028,7 +13048,7 @@ void shaman_t::summon_ancestor( double proc_chance, bool from_set )
   timespan_t ancestor_duration =
       from_set ? buff.call_of_the_ancestors_tww3_set->buff_duration() : buff.call_of_the_ancestors->buff_duration();
   pet.ancestor.spawn( ancestor_duration );
-  buff.call_of_the_ancestors->trigger();
+  buff.call_of_the_ancestors->trigger( ancestor_duration );
 }
 
 void shaman_t::summon_lesser_elemental( elemental type, timespan_t override_duration )
@@ -13300,7 +13320,7 @@ void shaman_t::trigger_deeply_rooted_elements( const action_state_t* state )
   auto spell = debug_cast<shaman_spell_t*>( state->action );
   unsigned draws = specialization() == SHAMAN_ENHANCEMENT
     ? spell->mw_consumed_stacks
-    : spell->last_resource_cost;
+    : as<unsigned>( spell->last_resource_cost );
 
   bool success = false;
   for ( auto draw = 0U; draw < draws; ++draw )
@@ -13813,12 +13833,9 @@ void shaman_t::trigger_whirling_fire( const action_state_t* state )
   // Mote of Fire extends an existing Hot Hand buff, or triggers a new one with its duration
   buff.hot_hand->extend_duration_or_trigger( buff.whirling_fire->data().effectN( 1 ).time_value() );
 
-  if ( buff.whirling_fire->check() )
-  {
-    buff.whirling_fire->decrement();
+  buff.whirling_fire->decrement();
 
-    trigger_tww3_totemic_enh_2pc( state );
-  }
+  trigger_tww3_totemic_enh_2pc( state );
 }
 
 void shaman_t::trigger_stormblast( const action_state_t* state )
@@ -13946,12 +13963,9 @@ void shaman_t::trigger_whirling_air( const action_state_t* state )
     trigger_totemic_rebound( state, true, 300_ms + i * 500_ms );
   }
 
-  if ( buff.whirling_air->check() )
-  {
-    buff.whirling_air->decrement();
+  buff.whirling_air->decrement();
 
-    trigger_tww3_totemic_enh_2pc( state );
-  }
+  trigger_tww3_totemic_enh_2pc( state );
 }
 
 void shaman_t::trigger_reactivity( const action_state_t* state )

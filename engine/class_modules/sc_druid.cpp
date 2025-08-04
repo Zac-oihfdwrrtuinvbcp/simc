@@ -548,7 +548,7 @@ struct druid_t final : public parse_player_effects_t
   moon_stage_e moon_stage;
   std::vector<event_t*> persistent_event_delay;
   event_t* astral_power_decay;
-  buff_t* lycaras_meditation_buff;  // TODO: remove in 11.2
+
   struct dot_list_t
   {
     std::vector<dot_t*> moonfire;
@@ -561,6 +561,12 @@ struct druid_t final : public parse_player_effects_t
     std::vector<dot_t*> regrowth;
     std::vector<dot_t*> efflorescence;
   } dot_lists;
+
+  // buffs that delay application if certain spells are queued after
+  struct queued_buffs_t
+  {
+    bool gathering_moonlight;
+  } queued_buffs;
   // !!!==========================================================================!!!
 
   // Options
@@ -588,6 +594,7 @@ struct druid_t final : public parse_player_effects_t
     unsigned adaptive_swarm_melee_targets = 7;
     unsigned adaptive_swarm_ranged_targets = 12;
     std::string adaptive_swarm_prepull_setup = "";
+    bool disable_ready_trigger = false;
 
     // Guardian
 
@@ -917,7 +924,6 @@ struct druid_t final : public parse_player_effects_t
     player_talent_t lingering_healing;
     player_talent_t lore_of_the_grove;
     player_talent_t lycaras_inspiration;
-    player_talent_t lycaras_meditation;  // TODO: remove in 11.2
     player_talent_t lycaras_teachings;
     player_talent_t maim;
     player_talent_t matted_fur;
@@ -1329,6 +1335,9 @@ struct druid_t final : public parse_player_effects_t
     regen_caches[ CACHE_ATTACK_HASTE ] = true;
   }
 
+  // hide player_t::is_ptr()
+  bool is_ptr() const { return dbc->wowv() > dbc::client_data_version( false ); }
+
   // Character Definition
   void activate() override;
   void init() override;
@@ -1399,6 +1408,7 @@ struct druid_t final : public parse_player_effects_t
   druid_td_t* get_target_data( player_t* target ) const override;
   void copy_from( player_t* ) override;
   void moving() override;
+  action_t* execute_action() override;
 
   // utility functions
   void init_beast_weapon( weapon_t&, double );
@@ -1427,6 +1437,7 @@ private:
   void apl_balance();
   void apl_balance_ptr();
   void apl_guardian();
+  void apl_guardian_ptr();
   void apl_restoration();
 
   target_specific_t<druid_td_t> target_data;
@@ -2495,6 +2506,37 @@ struct ravage_base_t : public BASE
 
 // community testing (~257k ticks) memorial
 // https://docs.google.com/spreadsheets/d/1lPDhmfqe03G_eFetGJEbSLbXMcfkzjhzyTaQ8mdxADM/edit?gid=385734241
+
+/* Dev Notes:
+Whenever an event occurs that can trigger Bloodseeker Vines or Symbiotic Blooms occurs, an amount is added to an
+accumulator. That amount is initialized by a value in the Thriving Growth spell, modified by the number of DoTs or HoTs
+that are active so chance doesn't grow linearly with number of targets in AOE, and randomized. When the accumulator is
+greater than 1000, an instance of Bloodseeker Vines or Symbiotic Blooms is generated and the accumulator is reduced by
+1000. Thriving Growth Parameters in SpellID 439528:
+
+100 - Rip tick accumulator initial value
+135 - Rake tick accumulator initial value
+85 - Wild Growth tick accumulator initial value
+155 - Regrowth tick accumulator initial value
+155 - Efflorescence tick accumulator initial value
+62 - Bloodseeker Vines inverse growth coefficient * 100
+75 - Symbiotic Blooms inverse growth coefficient * 100
+The formula for the amount added by a triggering event is:
+
+Aura Accumulator Initial Value / (Number of Active Auras) ^ (Inverse Coefficient)
+
+Efflorescence works slightly differently - its accumulator value is just divided by the number of targets healed.
+
+These formulas causes it to behave similarly to the chance for Apex Predator’s Craving to proc, where each additional
+affected target provides a smaller increase than the one before. For example, if you have 4 Rips active, the amount
+accumulated per damage tick is 100 / (4 ^ 0.62), or 42. Since you have 4 Rips ticking, you’ll accumulate 168 in the time
+you’d accumulate 100 with just one Rip active.
+
+The calculated amount of every event is then randomized by multiplying its value by a random value between 0 and 2.
+Finally, it is added to the accumulator. There is no bad luck protection or delay before another growth can occur.
+
+The 11.2 Set Bonus works by multiplying the accumulator initial values by 1 + the set bonus chance.
+*/
 struct thriving_growth_rng_t : public proc_rng_t
 {
   static constexpr rng_type_e rng_type = RNG_CUSTOM;
@@ -2528,8 +2570,8 @@ struct thriving_growth_rng_t : public proc_rng_t
                        ? 1.0 + p->sets->set( HERO_WILDSTALKER, TWW3, B2 )->effectN( 4 ).percent()
                        : 1.0;
 
-    auto vine_exp  = p->is_ptr() ? p->talent.thriving_growth->effectN( 6 ).percent() : 0.75;
-    auto bloom_exp = p->is_ptr() ? p->talent.thriving_growth->effectN( 7 ).percent() : 0.75;
+    auto vine_exp  = p->talent.thriving_growth->effectN( 6 ).percent();
+    auto bloom_exp = p->talent.thriving_growth->effectN( 7 ).percent();
 
     c_rip  = { &p->dot_lists.rip, p->active.bloodseeker_vines, p->talent.thriving_growth->effectN( 1 ).base_value(),
                vine_mul, vine_exp };
@@ -2549,7 +2591,7 @@ struct thriving_growth_rng_t : public proc_rng_t
     if ( r_type == reset_type_e::COMBAT )
       count -= threshold;
     else
-      count = 0.0;
+      count = player->rng().range( threshold );  // accumulator seems to never reset, so randomize each start
   }
 
   int _calculate( const coeffs_t& c, action_state_t* s )
@@ -2597,7 +2639,8 @@ template <typename BASE>
 struct trigger_thriving_growth_t : public BASE
 {
 protected:
-  thriving_growth_rng_t* _rng = nullptr;
+  thriving_growth_rng_t* vine_rng = nullptr;
+  thriving_growth_rng_t* bloom_rng = nullptr;
 
   using base_t = trigger_thriving_growth_t<BASE>;
 
@@ -2606,15 +2649,31 @@ public:
     : BASE( n, p, s, f )
   {
     if ( p->talent.thriving_growth.ok() )
-      _rng = p->get_rng<thriving_growth_rng_t>( "thriving_growth" );
+    {
+      vine_rng = p->get_rng<thriving_growth_rng_t>( "bloodseeker_vines" );
+      // bloom_rng = p->get_rng<thriving_growth_rng_t>( "symbiotic_blooms" ); NYI
+    }
   }
 
   void tick( dot_t* d ) override
   {
     BASE::tick( d );
 
-    if ( _rng )
-      _rng->trigger( d->state );
+    switch ( d->state->result_type )
+    {
+      case result_amount_type::DMG_DIRECT:
+      case result_amount_type::DMG_OVER_TIME:
+        if ( vine_rng )
+          vine_rng->trigger( d->state );
+        break;
+      case result_amount_type::HEAL_DIRECT:
+      case result_amount_type::HEAL_OVER_TIME:
+        if ( bloom_rng )
+          bloom_rng->trigger( d->state );
+        break;
+      default:
+        break;
+    }
   }
 };
 
@@ -3848,14 +3907,9 @@ struct druid_form_t : public druid_spell_t
 {
   buff_t* form_buff = nullptr;
   buff_t* lycara_buff = nullptr;
-  timespan_t meditation_dur;  // TODO: remove in 11.2
-  timespan_t meditation_required;  // TODO: remove in 11.2
   form_e form = NO_FORM;
 
-  druid_form_t( std::string_view n, druid_t* p, const spell_data_t* s, flag_e f )
-    : druid_spell_t( n, p, s, f ),
-      meditation_dur( p->talent.lycaras_meditation->effectN( 1 ).time_value() ),
-      meditation_required( p->talent.lycaras_meditation->effectN( 2 ).time_value() )
+  druid_form_t( std::string_view n, druid_t* p, const spell_data_t* s, flag_e f ) : druid_spell_t( n, p, s, f )
   {
     harmful = reset_melee_swing = false;
     ignore_false_positive = true;
@@ -3911,33 +3965,11 @@ struct druid_form_t : public druid_spell_t
     if ( old_form == form )
       return;
 
-    auto old_buff = get_form_buff( old_form );
-    if ( old_buff )
+    if ( auto old_buff = get_form_buff( old_form ) )
       old_buff->expire();
 
-    if ( p()->talent.lycaras_teachings.ok() )
-    {
-      // TODO: confirm meditation required scales with spell haste
-      if ( old_buff && meditation_dur > 0_ms &&
-           ( sim->current_time() == 0_ms ||
-             old_buff->elapsed( sim->current_time() ) >= meditation_required * p()->cache.spell_haste() ) )
-      {
-        // remove old lycaras meditation
-        if ( p()->lycaras_meditation_buff )
-        {
-          p()->lycaras_meditation_buff->expire();
-          p()->lycaras_meditation_buff = nullptr;
-        }
-
-        // apply new lycaras meditation
-        p()->lycaras_meditation_buff = get_lycara_buff( old_form );
-        p()->lycaras_meditation_buff->trigger( meditation_dur );
-      }
-      else
-      {
-        get_lycara_buff( old_form )->expire();
-      }
-    }
+    if ( lycara_buff )
+      get_lycara_buff( old_form )->expire();
 
     p()->form = form;
 
@@ -9121,7 +9153,7 @@ struct starsurge_ec_tww3_t final : public BASE
     if ( BASE::rng().roll( chance ) )
     {
       BASE::execute();
-      BASE::p()->buff.gathering_moonlight->trigger();
+      BASE::p()->queued_buffs.gathering_moonlight = true;
     }
   }
 
@@ -10407,6 +10439,10 @@ struct druid_melee_t : public Base
   {
     ab::impact( s );
 
+    // TODO: remove if ever fixed
+    if ( ab::p()->buff.dryads_favor->data().proc_flags() & PF_MELEE )
+      ab::p()->buff.dryads_favor->decrement();
+
     if ( ab::result_is_hit( s->result ) )
     {
       if ( ooc_chance )
@@ -10912,7 +10948,6 @@ void druid_t::init_spells()
   talent.lingering_healing              = CT( "Lingering Healing" );
   talent.lore_of_the_grove              = CT( "Lore of the Grove" );
   talent.lycaras_inspiration            = CT( "Lycara's Inspiration" );
-  talent.lycaras_meditation             = CT( "Lycara's Meditation" );  // TODO: remove in 11.2
   talent.lycaras_teachings              = CT( "Lycara's Teachings" );
   talent.maim                           = CT( "Maim" );
   talent.mass_entanglement              = CT( "Mass Entanglement" );
@@ -11365,6 +11400,11 @@ void druid_t::init_base_stats()
   resources.base_regen_per_second[ RESOURCE_ENERGY ] *=
     1.0 + find_effect( talent.tireless_energy, A_MOD_POWER_REGEN_PERCENT ).percent();
 
+  if ( options.disable_ready_trigger )
+    ready_type = ready_e::READY_POLL;
+  else if ( specialization() == DRUID_FERAL )
+    ready_type = ready_e::READY_TRIGGER;
+
   base_gcd = 1.5_s;
 }
 
@@ -11405,6 +11445,9 @@ void druid_t::init_finished()
   }
 
   player_t::init_finished();
+
+  if ( ready_type == READY_TRIGGER && resource_thresholds.empty() )
+    resource_thresholds.push_back( 0 );
 
   // PRECOMBAT SHENANIGANS
   // we do this here so all precombat actions have gone throught init() and init_finished() so if-expr are properly
@@ -12716,6 +12759,11 @@ void druid_t::apl_guardian()
 #include "class_modules/apl/guardian_apl.inc"
 }
 
+void druid_t::apl_guardian_ptr()
+{
+#include "class_modules/apl/guardian_apl_ptr.inc"
+}
+
 void druid_t::apl_restoration()
 {
 #include "class_modules/apl/restoration_druid_apl.inc"
@@ -12809,7 +12857,9 @@ bool druid_t::validate_fight_style( fight_style_e style ) const
 #ifdef NDEBUG
       if ( style == FIGHT_STYLE_DUNGEON_SLICE && !options.enable_dungeon_slice_for_balance )
       {
-        sim->error( "DungeonSlice is disabled for Balance Druids. To force enable, use druid.enable_dungeon_slice_for_balance=1 option." );
+        sim->error( error_level_e::SEVERE,
+                    "DungeonSlice is disabled for Balance Druids. To force enable, use "
+                    "druid.enable_dungeon_slice_for_balance=1 option." );
         sim->cancel();
       }
 #endif
@@ -13431,15 +13481,19 @@ void druid_t::init_special_effects()
           mul( s->effectN( p->specialization() == DRUID_BALANCE ? 4 : 3 ).percent() )
       {}
 
+      void trigger( action_t* a, action_state_t* s ) override
+      {
+        // heal NYI
+        if ( s->result_amount && ( s->result_type == result_amount_type::DMG_DIRECT ||
+                                   s->result_type == result_amount_type::DMG_OVER_TIME ) )
+        {
+          druid_cb_t::trigger( a, s );
+        }
+      }
+
       void execute( action_t*, action_state_t* s ) override
       {
-        auto amount =
-          s->result_type == result_amount_type::HEAL_DIRECT || s->result_type == result_amount_type::HEAL_OVER_TIME
-            ? s->result_total
-            : s->result_amount;
-
-        if ( amount )
-          p()->buff.dryad->current_value += amount * mul;
+        p()->buff.dryad->current_value += s->result_amount * mul;
       }
     };
 
@@ -13472,11 +13526,11 @@ void druid_t::init_action_list()
 
   switch ( specialization() )
   {
-    case DRUID_FERAL:       is_ptr() ? apl_feral_ptr() : apl_feral();     break;
-    case DRUID_BALANCE:     is_ptr() ? apl_balance_ptr() : apl_balance(); break;
-    case DRUID_GUARDIAN:    apl_guardian();                               break;
-    case DRUID_RESTORATION: apl_restoration();                            break;
-    default:                apl_default();                                break;
+    case DRUID_FERAL:       is_ptr() ? apl_feral_ptr() : apl_feral();       break;
+    case DRUID_BALANCE:     is_ptr() ? apl_balance_ptr() : apl_balance();   break;
+    case DRUID_GUARDIAN:    is_ptr() ? apl_guardian_ptr() : apl_guardian(); break;
+    case DRUID_RESTORATION: apl_restoration();                              break;
+    default:                apl_default();                                  break;
   }
 
   use_default_action_list = true;
@@ -13495,8 +13549,6 @@ void druid_t::init_blizzard_action_list()
     def->add_action( "auto_attack" );
 
   player_t::init_blizzard_action_list();
-
-  cd->add_action( "use_items" );
 
   switch ( specialization() )
   {
@@ -13586,13 +13638,13 @@ void druid_t::reset()
   moon_stage = static_cast<moon_stage_e>( options.initial_moon_stage );
   persistent_event_delay.clear();
   astral_power_decay = nullptr;
-  lycaras_meditation_buff = nullptr;  // TODO: remove in 11.2
   dot_lists.moonfire.clear();
   dot_lists.sunfire.clear();
   dot_lists.rake.clear();
   dot_lists.rip.clear();
   dot_lists.thrash_bear.clear();
   dot_lists.dreadful_wound.clear();
+  queued_buffs.gathering_moonlight = false;
 }
 
 // druid_t::merge ===========================================================
@@ -13685,15 +13737,16 @@ double druid_t::resource_gain( resource_e r, double amount, gain_t* g, action_t*
 // druid_t::available =======================================================
 timespan_t druid_t::available() const
 {
-  if ( primary_resource() != RESOURCE_ENERGY )
+  if ( ready_type != ready_e::READY_TRIGGER )
     return player_t::available();
 
   double energy = resources.current[ RESOURCE_ENERGY ];
 
-  if ( energy > 25 )
-    return 100_ms;
+  if ( energy >= resource_thresholds.front() )
+    return player_t::available();
 
-  return std::max( timespan_t::from_seconds( ( 25 - energy ) / resource_regen_per_second( RESOURCE_ENERGY ) ), 100_ms );
+  return std::max( player_t::available(), timespan_t::from_seconds( ( resource_thresholds.front() - energy ) /
+                                                                    resource_regen_per_second( RESOURCE_ENERGY ) ) );
 }
 
 // druid_t::precombat_init (called before precombat apl)=======================
@@ -14240,6 +14293,7 @@ void druid_t::create_options()
   add_option( opt_uint( "druid.adaptive_swarm_melee_targets", options.adaptive_swarm_melee_targets, 1U, 29U ) );
   add_option( opt_uint( "druid.adaptive_swarm_ranged_targets", options.adaptive_swarm_ranged_targets, 1U, 29U ) );
   add_option( opt_func( "druid.adaptive_swarm_prepull_setup", parse_swarm_setup ) );
+  add_option( opt_bool( "druid.disable_ready_trigger", options.disable_ready_trigger ) );
 
   // Guardian
 
@@ -15103,6 +15157,25 @@ void druid_t::moving()
 {
   if ( ( executing && !executing->usable_moving() ) || ( channeling && !channeling->usable_moving() ) )
     player_t::interrupt();
+}
+
+action_t* druid_t::execute_action()
+{
+  auto a = player_t::execute_action();
+
+  // if the previous action triggered gathering moonlight and the new action is fury of elune, the application of gathering moonlight it sequenced
+  if ( a && queued_buffs.gathering_moonlight && a->type != ACTION_OTHER && a->type != ACTION_CALL &&
+       a->type != ACTION_SEQUENCE )
+  {
+    queued_buffs.gathering_moonlight = false;
+
+    if ( a->id == 202770 )
+      make_event( *sim, [ this ]() { buff.gathering_moonlight->trigger(); } );
+    else
+      buff.gathering_moonlight->trigger();
+  }
+
+  return a;
 }
 
 // ==========================================================================

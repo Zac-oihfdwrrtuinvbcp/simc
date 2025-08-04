@@ -1045,7 +1045,6 @@ public:
                                               int misc_value               = P_GENERIC,
                                               const spell_data_t* affected = spell_data_t::nil(),
                                               effect_type_t type           = E_APPLY_AURA );
-  const spell_data_t* find_spell_override( const spell_data_t* base, const spell_data_t* passive );
   const spell_data_t* find_spell_override( const spell_data_t* base, std::vector<const spell_data_t*> passives );
   const spell_data_t* conditional_spell_lookup( bool fn, int id );
   void set_out_of_range( timespan_t duration );
@@ -1824,7 +1823,14 @@ public:
 
       if ( const auto& effect = p()->talent.aldrachi_reaver.art_of_the_glaive->effectN( idx );
            effect.ok() && in_whitelist() )
-        add_parse_entry( ab::da_multiplier_effects ).set_buff( buff ).set_value( effect.percent() ).set_eff( &effect );
+      {
+        auto added_entry = add_parse_entry( ab::da_multiplier_effects )
+                               .set_buff( buff )
+                               .set_value( effect.percent() )
+                               .set_eff( &effect );
+        ab::debug_message( added_entry, "direct damage", fmt::format( "{:.1f}%", effect.base_value() ), false,
+                           &buff->data(), idx );
+      }
     };
     std::vector<int> art_of_the_glaive_glaive_flurry_affected_list  = { 199552, 200685, 391374, 391378, 210153,
                                                                         210155, 393054, 393055, 228478 };
@@ -2256,7 +2262,13 @@ struct art_of_the_glaive_trigger_t : public BASE
 
       BASE::p()->buff.glaive_flurry->expire();
       make_event( *BASE::p()->sim, thrill_delay, [ this, second_ability ] {
-        BASE::p()->buff.art_of_the_glaive_first->expire();
+        // 2025-07-19 -- Using glaive flurry as havoc causes all subsequent death sweeps and blade dances to
+        // gain the first art of the glaive buff, even after all related reavers glaives buffs expire until
+        // either chaos strike of annihilation are used.
+        if ( BASE::p()->specialization() != DEMON_HUNTER_HAVOC )
+        {
+          BASE::p()->buff.art_of_the_glaive_first->expire();
+        }
         BASE::p()->buff.art_of_the_glaive_second_glaive_flurry->expire();
         BASE::p()->buff.art_of_the_glaive_second_rending_strike->expire();
         if ( !second_ability )
@@ -2271,15 +2283,24 @@ struct art_of_the_glaive_trigger_t : public BASE
       second_ability = !BASE::p()->buff.glaive_flurry->up();
 
       int second_ability_increase =
-          BASE::p()->is_ptr() ? BASE::p()->talent.aldrachi_reaver.reavers_mark->effectN( 2 ).base_value() : 1;
+          BASE::p()->is_ptr() ? as<int>( BASE::p()->talent.aldrachi_reaver.reavers_mark->effectN( 2 ).base_value() )
+                              : 1;
 
       int first_ability_amount = 1;
       int second_ability_amount =
-          1 + second_ability_increase + BASE::p()->set_bonuses.tww3_aldrachi_4pc->effectN( 3 ).base_value();
+          1 + second_ability_increase + as<int>( BASE::p()->set_bonuses.tww3_aldrachi_4pc->effectN( 3 ).base_value() );
       if ( BASE::p()->talent.aldrachi_reaver.reavers_mark->ok() )
       {
         BASE::td( BASE::target )
             ->debuffs.reavers_mark->trigger( second_ability ? second_ability_amount : first_ability_amount );
+      }
+      // 2025-07-19 -- Consuming rending strike as havoc during a death sweep before the final hit causes the
+      // final death sweep hit to also gain the second art of the glaive damage buff. This applies that buff
+      // temporarily during the rending strike even to ensure the final death sweep hit also gains the buff.
+      if ( ( BASE::p()->specialization() == DEMON_HUNTER_HAVOC ) && second_ability )
+      {
+        BASE::p()->buff.art_of_the_glaive_first->expire();
+        BASE::p()->buff.art_of_the_glaive_second_glaive_flurry->trigger();
       }
 
       BASE::p()->buff.rending_strike->expire();
@@ -2300,9 +2321,8 @@ struct art_of_the_glaive_trigger_t : public BASE
       {
         BASE::p()->buff.thrill_of_the_fight_attack_speed->trigger();
 
-        make_event( *BASE::p()->sim, thrill_delay, [ this ] {
-          BASE::p()->buff.thrill_of_the_fight_damage->trigger();
-        } );
+        make_event( *BASE::p()->sim, thrill_delay,
+                    [ this ] { BASE::p()->buff.thrill_of_the_fight_damage->trigger(); } );
       }
       if ( BASE::p()->talent.aldrachi_reaver.aldrachi_tactics->ok() )
       {
@@ -5204,6 +5224,11 @@ struct blade_dance_base_t
       return am;
     }
 
+    double composite_da_multiplier( const action_state_t* s ) const override
+    {
+      return demon_hunter_attack_t::composite_da_multiplier( s );
+    }
+
     void impact( action_state_t* s ) override
     {
       demon_hunter_attack_t::impact( s );
@@ -6147,8 +6172,7 @@ struct fracture_t : public felblade_trigger_t<
 
   fracture_damage_t *mh, *oh;
 
-  fracture_t( demon_hunter_t* p, util::string_view options_str )
-    : base_t( "fracture", p, p->talent.vengeance.fracture, options_str )
+  fracture_t( demon_hunter_t* p ) : base_t( "fracture", p, p->talent.vengeance.fracture, "" )
   {
     int number_of_soul_fragments_to_spawn = as<int>( data().effectN( 1 ).base_value() );
     // divide the number in 2 as half come from main hand, half come from offhand.
@@ -6245,8 +6269,29 @@ struct inner_demon_t : public demon_hunter_spell_t
 struct shear_t : public felblade_trigger_t<
                      art_of_the_glaive_trigger_t<art_of_the_glaive_ability::RENDING_STRIKE, demon_hunter_attack_t>>
 {
-  shear_t( demon_hunter_t* p, util::string_view options_str ) : base_t( "shear", p, p->spec.shear, options_str )
+  fracture_t* fracture;
+
+  shear_t( demon_hunter_t* p, util::string_view options_str )
+    : base_t( "shear", p, p->spec.shear, options_str ), fracture( nullptr )
   {
+    if ( p->talent.vengeance.fracture->ok() )
+    {
+      fracture = new fracture_t( p );
+      cooldown = fracture->cooldown;
+      stats = fracture->stats;
+    }
+  }
+
+  void execute() override
+  {
+    if ( p()->talent.vengeance.fracture->ok() )
+    {
+      fracture->execute_on_target( target );
+//      stats->add_execute( 0_ms, target );
+      return;
+    }
+
+    base_t::execute();
   }
 
   void impact( action_state_t* s ) override
@@ -6288,12 +6333,14 @@ struct shear_t : public felblade_trigger_t<
     return ea;
   }
 
-  bool verify_actor_spec() const override
+  bool ready() override
   {
     if ( p()->talent.vengeance.fracture->ok() )
-      return false;
+    {
+      return fracture->ready();
+    }
 
-    return demon_hunter_attack_t::verify_actor_spec();
+    return demon_hunter_action_t::ready();
   }
 };
 
@@ -7863,8 +7910,6 @@ action_t* demon_hunter_t::create_action( util::string_view name, util::string_vi
     return new felblade_t( this, options_str );
   if ( name == "fel_rush" )
     return new fel_rush_t( this, options_str );
-  if ( name == "fracture" )
-    return new fracture_t( this, options_str );
   if ( name == "shear" )
     return new shear_t( this, options_str );
   if ( name == "soul_cleave" )
@@ -8603,7 +8648,7 @@ void demon_hunter_t::init_spells()
   spec.demon_spikes        = find_specialization_spell( "Demon Spikes" );
   spec.infernal_strike     = find_specialization_spell( "Infernal Strike" );
   spec.soul_cleave         = find_specialization_spell( "Soul Cleave" );
-  spec.shear               = find_specialization_spell( "Shear" );
+  spec.shear               = find_spell( 203782, DEMON_HUNTER_VENGEANCE );
   spec.soul_cleave_2       = find_rank_spell( "Soul Cleave", "Rank 2" );
   spec.riposte             = find_specialization_spell( "Riposte" );
   spec.soul_fragments_buff = find_spell( 203981, DEMON_HUNTER_VENGEANCE );
@@ -10181,18 +10226,6 @@ const spelleffect_data_t* demon_hunter_t::find_spelleffect( const spell_data_t* 
 }
 
 // Return the appropriate spell when `base` is overriden to another spell by `passive`
-const spell_data_t* demon_hunter_t::find_spell_override( const spell_data_t* base, const spell_data_t* passive )
-{
-  if ( !passive->ok() || !base->ok() )
-    return base;
-
-  auto id = as<unsigned>( find_spelleffect( passive, A_OVERRIDE_ACTION_SPELL, base->id() )->base_value() );
-  if ( !id )
-    return base;
-
-  return find_spell( id );
-}
-
 const spell_data_t* demon_hunter_t::find_spell_override( const spell_data_t* base,
                                                          std::vector<const spell_data_t*> passives )
 {

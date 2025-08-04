@@ -176,7 +176,7 @@ using namespace helpers;
           {
             if ( p()->rain_of_chaos_rng->trigger() )
             {
-              auto spawned = p()->warlock_pet_list.infernals.spawn( p()->talents.summon_infernal_roc->duration() );
+              auto spawned = p()->warlock_pet_list.rocs.spawn( p()->talents.summon_infernal_roc->duration() );
               for ( pets::destruction::infernal_t* s : spawned )
               {
                 s->type = pets::destruction::infernal_t::infernal_type_e::RAIN;
@@ -536,14 +536,20 @@ using namespace helpers;
       if ( destruction() && affected_by.echo_of_the_azjaqir_dd && p()->buffs.echo_of_the_azjaqir->check() )
         m *= 1.0 + p()->tier.echo_of_the_azjaqir->effectN( 1 ).percent();
 
+      if ( hellcaller() && affected_by.xalans_ferocity_dd && p()->hero.xalans_ferocity.ok() )
+      {
+            m *= 1.0 + p()->hero.xalans_ferocity->effectN( 1 ).percent() + ( destruction()
+                        ? p()->warlock_base.destruction_warlock->effectN( 10 ).percent() : 0 );       
+      }
+
+       if ( hellcaller() && affected_by.xalans_cruelty_dd && p()->hero.xalans_cruelty.ok() )
+       {
+         m *= 1.0 + p()->hero.xalans_cruelty->effectN( 3 ).percent() + ( destruction()
+                        ? p()->warlock_base.destruction_warlock->effectN( 23 ).percent() : 0 );
+       }
+
       if ( diabolist() && affected_by.flames_of_xoroth_dd && p()->hero.flames_of_xoroth.ok() )
         m *= 1.0 + p()->hero.flames_of_xoroth->effectN( 1 ).percent();
-
-      if ( hellcaller() && affected_by.xalans_ferocity_dd && p()->hero.xalans_ferocity.ok() )
-        m *= 1.0 + p()->hero.xalans_ferocity->effectN( 1 ).percent();
-
-      if ( hellcaller() && affected_by.xalans_cruelty_dd && p()->hero.xalans_cruelty.ok() )
-        m *= 1.0 + p()->hero.xalans_cruelty->effectN( 3 ).percent();
 
       return m;
     }
@@ -574,11 +580,16 @@ using namespace helpers;
         m *= 1.0 + p()->hero.flames_of_xoroth->effectN( 2 ).percent();
 
       if ( hellcaller() && affected_by.xalans_ferocity_td && p()->hero.xalans_ferocity.ok() )
-        m *= 1.0 + p()->hero.xalans_ferocity->effectN( 2 ).percent();
+      {
+        m *= 1.0 + p()->hero.xalans_ferocity->effectN( 2 ).percent() + ( destruction()
+                          ? p()->warlock_base.destruction_warlock->effectN( 17 ).percent() : 0 );
+      }
 
       if ( hellcaller() && affected_by.xalans_cruelty_td && p()->hero.xalans_cruelty.ok() )
-        m *= 1.0 + p()->hero.xalans_cruelty->effectN( 4 ).percent();
-
+      {
+        m *= 1.0 + p()->hero.xalans_cruelty->effectN( 4 ).percent() + ( destruction()
+                          ? p()->warlock_base.destruction_warlock->effectN( 21 ).percent() : 0 );
+      }
       return m;
     }
 
@@ -1426,7 +1437,6 @@ using namespace helpers;
 
       triggers.decimation = false;
       
-      base_dd_multiplier *=1.0 + p->hero.seeds_of_their_demise->effectN( 3 ).percent();
     }
 
     double composite_target_multiplier( player_t* target ) const override
@@ -1673,6 +1683,16 @@ using namespace helpers;
 
         if ( active_2pc( TWW1 ) )
           m *= 1.0 + p()->tier.hexflame_aff_2pc->effectN( 2 ).percent();
+
+        return m;
+      }
+
+      double composite_da_multiplier( const action_state_t* s ) const override
+      {
+        double m = warlock_spell_t::composite_da_multiplier( s );
+
+        if ( soul_harvester() && p()->buffs.succulent_soul->check() )
+          m *= 1.0 + p()->hero.succulent_soul->effectN( 2 ).percent();
 
         return m;
       }
@@ -4612,6 +4632,7 @@ using namespace helpers;
       if ( demonology() )
       {
         base_dd_multiplier *= 1.0 + p->talents.sargerei_technique->effectN( 1 ).percent();
+        base_dd_multiplier *= 1.0 + p->talents.sargerei_technique->effectN( 2 ).percent(); //  Sargerei Technique Appears to Double dip for Infernal Bolt due to Destro modifier
         base_dd_multiplier *= 1.0 + p->talents.rune_of_shadows->effectN( 3 ).percent();
 
         if ( active_2pc( TWW1 ) )
@@ -4619,7 +4640,10 @@ using namespace helpers;
       }
 
       if ( destruction() )
-        base_dd_multiplier *= 1.0 + p->talents.sargerei_technique->effectN( 2 ).percent();
+      {
+       base_dd_multiplier *= 1.0 + p->talents.sargerei_technique->effectN( 2 ).percent();
+       base_dd_multiplier *= 1.0 + p->talents.sargerei_technique->effectN( 1 ).percent(); //  Sargerei Technique Appears to Double dip for Infernal Bolt due to Demo modifier
+      }
     }
 
     bool ready() override

@@ -851,7 +851,7 @@ namespace
 {
 struct hero_tree_index_map_t
 {
-  std::array<int8_t, hero_talent_e::HERO_MAX> data;
+  std::array<int8_t, hero_tree_e::HERO_MAX> data;
 
 private:
   std::array<int8_t, MAX_SPEC_CLASS> classes;
@@ -875,7 +875,7 @@ public:
     }
   }
 
-  constexpr int8_t operator[]( hero_talent_e hero_tree ) const
+  constexpr int8_t operator[]( hero_tree_e hero_tree ) const
   {
     assert( hero_tree < std::size( data ) );
     return data[ hero_tree ];
@@ -883,7 +883,7 @@ public:
 };
 }  // namespace
 
-int dbc::hero_idx( hero_talent_e hero_talent, bool ptr )
+int dbc::hero_idx( hero_tree_e hero_talent, bool ptr )
 {
 #if SC_USE_PTR
   static constexpr hero_tree_index_map_t hero_tree_index_map;
@@ -895,7 +895,7 @@ int dbc::hero_idx( hero_talent_e hero_talent, bool ptr )
 #endif
 }
 
-int dbc::composite_idx( specialization_e spec, hero_talent_e hero, bool ptr )
+int dbc::composite_idx( specialization_e spec, hero_tree_e hero, bool ptr )
 {
   assert( ( spec != SPEC_NONE ) != ( hero != HERO_NONE ) );
   int index = 0;
@@ -1330,11 +1330,11 @@ double dbc_t::avoid_per_str_agi_by_level( unsigned level ) const
 #endif
 }
 
-double dbc_t::health_base( player_e t, unsigned level ) const
+double dbc_t::health_base( player_e t, [[maybe_unused]] unsigned level ) const
 {
-  uint32_t class_id = util::class_id( t );
-  ( void ) class_id; ( void ) level;
-#if SC_USE_PTR
+  [[maybe_unused]] auto class_id = util::class_id( t );
+
+  #if SC_USE_PTR
   assert( class_id < ( ptr ? PTR_MAX_CLASS : MAX_CLASS ) && level > 0 && level <= MAX_SCALING_LEVEL );
 #else
   assert( class_id < MAX_CLASS && level > 0 && level <= MAX_SCALING_LEVEL );
@@ -1352,7 +1352,7 @@ double dbc_t::health_base( player_e t, unsigned level ) const
 
 double dbc_t::resource_base( player_e t, unsigned level ) const
 {
-  uint32_t class_id = util::class_id( t );
+  auto class_id = util::class_id( t );
 
 #if SC_USE_PTR
   assert( class_id < ( ptr ? PTR_MAX_CLASS : MAX_CLASS ) && level > 0 && level <= MAX_SCALING_LEVEL );
@@ -2140,8 +2140,8 @@ specialization_e dbc_t::spec_by_idx( const player_e c, unsigned idx ) const
 {
   unsigned cid = util::class_id( c );
 #if SC_USE_PTR
-  if ( !cid || cid >= ( ptr ? PTR_MAX_SPEC_CLASS : MAX_SPEC_CLASS ) ||
-       idx >= ( ptr ? PTR_MAX_SPECS_PER_CLASS : MAX_SPECS_PER_CLASS ) )
+  if ( !cid || cid >= static_cast<unsigned>( ptr ? PTR_MAX_SPEC_CLASS : MAX_SPEC_CLASS ) ||
+       idx >= static_cast<unsigned>( ptr ? PTR_MAX_SPECS_PER_CLASS : MAX_SPECS_PER_CLASS ) )
   {
     return SPEC_NONE;
   }
