@@ -960,7 +960,7 @@ void print_dps_plots( std::ostream& os, const player_t& p )
 {
   sim_t& sim = *p.sim;
 
-  if ( sim.plot->dps_plot_stat_str.empty() )
+  if ( sim.plot->dps_plot_stats.empty() )
     return;
 
   int range = sim.plot->dps_plot_points / 2;
@@ -970,15 +970,10 @@ void print_dps_plots( std::ostream& os, const player_t& p )
 
   int points = 1 + range * 2;
 
-  fmt::print( os, "  DPS Plot Data ( min={} max={} points={} )\n",
-      min,
-      max,
-      points );
+  fmt::print( os, "  DPS Plot Data ( min={} max={} points={} )\n", min, max, points );
 
-  for ( stat_e i = STAT_NONE; i < STAT_MAX; i++ )
+  for ( const auto& [ i, pd ] : p.dps_plot_data )
   {
-    const auto& pd = p.dps_plot_data[ i ];
-
     if ( !pd.empty() )
     {
       fmt::print( os, "    DPS({})=", util::stat_type_abbrev( i ) );
@@ -1368,20 +1363,13 @@ void print_text( sim_t* sim, bool detail )
     }
   }
 
-  try
+  report_timer_t t( "text report", stdout );
+  if ( !sim->profileset_enabled )
   {
-    report_timer_t t( "text report", stdout );
-    if ( ! sim -> profileset_enabled )
-    {
-      t.start();
-    }
+    t.start();
+  }
 
-    print_text_report( *out, sim, detail );
-  }
-  catch ( const std::exception& e )
-  {
-    sim->error( "Error generating text report: {}", e.what() );
-  }
+  print_text_report( *out, sim, detail );
 }
 
 }  // END report NAMESPACE

@@ -110,10 +110,10 @@ void enchant::initialize_item_enchant( item_t& item, std::vector<stat_pair_t>& s
   {
     if ( item.player->profession[ profession ] < static_cast<int>( enchant.req_skill_value ) )
     {
-      item.sim->error( "Player {} attempting to use {} '{}' without {} skill level of {} (has {}), disabling enchant.",
-                        item.player->name(), util::special_effect_source_string( source ), enchant.name,
-                        util::profession_type_string( profession ), enchant.req_skill_value,
-                        item.player->profession[ profession ] );
+      item.sim->error( "{} attempting to use {} '{}' with {} skill level of {}, requires {}.",
+                       *item.player, util::special_effect_source_string( source ), enchant.name,
+                       util::profession_type_string( profession ), item.player->profession[ profession ],
+                       enchant.req_skill_value );
       // Don't initialize the special effects, but do "succeed" the
       // initialization process.
       return;
@@ -372,7 +372,7 @@ item_socket_color enchant::initialize_gem( item_t& item, size_t gem_idx )
   const auto& gem = item.player->dbc->item( gem_id );
   if ( gem.id == 0 )
   {
-    throw std::invalid_argument( fmt::format( "No gem data for id {}.", gem_id ) );
+    throw sc_invalid_item_string( fmt::format( "No gem data for id '{}'.", gem_id ) );
   }
 
   const gem_property_data_t& gem_prop = item.player->dbc->gem_property( gem.gem_properties );
@@ -400,7 +400,7 @@ item_socket_color enchant::initialize_gem( item_t& item, size_t gem_idx )
 
   if ( !dbc::valid_gem_color( gem_prop.color ) )
   {
-    throw std::invalid_argument( fmt::format( "Invalid gem color {} from id {}.", gem_prop.color, gem_id ) );
+    throw sc_invalid_item_string( fmt::format( "Invalid gem color {} from id '{}'.", gem_prop.color, gem_id ) );
   }
 
   return static_cast<item_socket_color>( gem_prop.color );
@@ -607,9 +607,9 @@ void enchant::remove_other_reshii_bonuses( item_t& item )
           break;  // Do not remove these stats
         default:
           // Remove all other stats
-          item.base_stats.add_stat( s, -item.parsed.stat_val[ s ] );
-          item.stats.add_stat( s, -item.parsed.stat_val[ s ] );
-          item.parsed.stat_val[ s ]         = 0;
+          item.base_stats.add_stat( s, -item.parsed.stat_val[ i ] );
+          item.stats.add_stat( s, -item.parsed.stat_val[ i ] );
+          item.parsed.stat_val[ i ]         = 0;
           item.parsed.data.stat_type_e[ i ] = -1;
           item.parsed.data.stat_alloc[ i ]  = 0;
           break;

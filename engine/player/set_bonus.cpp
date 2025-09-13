@@ -293,9 +293,8 @@ void set_bonus_t::initialize()
 void set_bonus_t::parse_set_bonus_string()
 {
   auto do_error = [ this ]( std::string_view value ) {
-    actor->sim->error( error_level_e::MODERATE, "{} invalid 'set_bonus' option {}, available options: {}", *actor,
-                       value, generate_set_bonus_options() );
-    actor->sim->cancel();
+    throw sc_invalid_player_argument(
+      fmt::format( "Invalid 'set_bonus' option '{}', available options: {}", value, generate_set_bonus_options() ) );
   };
 
   auto split = util::string_split<std::string_view>( actor->set_bonus_str, "/" );
@@ -491,10 +490,20 @@ std::unique_ptr<expr_t> set_bonus_t::create_expression( const player_t*, util::s
     throw std::invalid_argument( fmt::format( "Cannot parse set bonus '{}'.", type ) );
   }
 
-  bool state =
-    tier != SET_BONUS_NONE && range::any_of( set_bonus_spec_data[ tier ], [ bonus ]( const auto& bonus_type ) {
-      return bonus_type[ bonus ].spell->id() > 0;
-    } );
+  bool state = false;
+
+  if ( tier != SET_BONUS_NONE )
+  {
+    for ( const auto& bonus_type : set_bonus_spec_data[ tier ] )
+    {
+      if ( bonus_type[ bonus ].spell->id() > 0 &&
+           ( hero == HERO_NONE || bonus_type[ bonus ].bonus->trait_sub_tree == static_cast<int>( hero ) ) )
+      {
+        state = true;
+        break;
+      }
+    }
+  }
 
   return expr_t::create_constant( type, static_cast<double>( state ) );
 }
@@ -508,9 +517,7 @@ bool set_bonus_t::parse_set_bonus_option( util::string_view opt_str, set_bonus_t
 
   auto split = util::string_split<util::string_view>( opt_str, "_" );
   if ( split.size() < 2 )
-  {
     return false;
-  }
 
   auto bonus_offset = split.back().find( "pc" );
   if ( bonus_offset == std::string::npos )
@@ -523,9 +530,31 @@ bool set_bonus_t::parse_set_bonus_option( util::string_view opt_str, set_bonus_t
   bonus = static_cast<set_bonus_e>( bonus_value - 1 );
 
   auto set_name_long = opt_str.substr( 0, opt_str.size() - split.back().size() - 1 );
-  auto set_name_short = split.front();
+  auto set_name_short = std::string( split.front() );
 
   auto set_bonuses = item_set_bonus_t::data( actor->dbc->ptr );
+
+  // special handling for 'latest_#pc'
+  if ( util::str_compare_ci( set_name_short, "latest" ) )
+  {
+    // assume __set_bonus_data is in chronological order
+    for ( auto it = set_bonuses.rbegin(); it != set_bonuses.rend(); it++ )
+    {
+      // assume sets with 4pc bonus & at least 5 items are tier sets
+      if ( it->bonus == 4 )
+      {
+        size_t i = 0;
+        while ( it->item_ids[ i ] )
+          i++;
+
+        if ( i >= 5 )
+        {
+          set_name_short = it->tier;
+          break;
+        }
+      }
+    }
+  }
 
   for ( const auto& bonus : set_bonuses )
   {

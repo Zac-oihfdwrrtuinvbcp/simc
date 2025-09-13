@@ -355,14 +355,20 @@ void trigger_hammer_and_anvil( paladin_t* p, action_state_t* s, hammer_and_anvil
 
       // 20.07.25 Fluttershy - BH currently triggers Masterwork on ICD, but does not trigger HaA meanwhile
       if ( p->sets->has_set_bonus( HERO_LIGHTSMITH, TWW3, B4 ) &&
-           ( judgment || !p->talents.blessed_hammer->ok() || ( p->buffs.lightsmith.fake_tww3_ls_bh->up() || p->bugs ) ) )
+           ( judgment || !p->talents.blessed_hammer->ok() ||
+             ( p->buffs.lightsmith.fake_tww3_ls_bh->up() || p->bugs ) ) )
       {
         if ( p->buffs.lightsmith.masterwork->at_max_stacks() )
         {
           p->cast_lesser_armament( 1, p->next_lesser_armament );
           p->next_lesser_armament = p->next_lesser_armament == LESSER_WEAPON ? LESSER_BULWARK : LESSER_WEAPON;
+          p->buffs.lightsmith.masterwork->trigger();
         }
-        p->buffs.lightsmith.masterwork->trigger();
+        else
+        {
+          p->buffs.lightsmith.masterwork->trigger();
+        }
+        
       }
     }
     if ( p->sets->has_set_bonus( HERO_LIGHTSMITH, TWW3, B2 ) && !judgment && p->cooldowns.tww3_lightsmith_2p_icd->up() )
@@ -434,8 +440,9 @@ struct blessed_hammer_t : public paladin_spell_t
     paladin_spell_t( "blessed_hammer", p, p->talents.blessed_hammer ),
     hammer( new blessed_hammer_tick_t( p ) ), num_strikes( 2 )
   {
-    add_option( opt_float( "strikes", num_strikes) );
     parse_options( options_str );
+    if ( p->options.blessed_hammer_strikes )
+      num_strikes = p->options.blessed_hammer_strikes;
 
     // Sanity check for num_strikes
     if ( num_strikes <= 0 || num_strikes > 10)

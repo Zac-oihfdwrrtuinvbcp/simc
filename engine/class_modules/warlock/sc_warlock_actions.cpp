@@ -52,6 +52,7 @@ using namespace helpers;
 
       // Diabolist
       bool touch_of_rancora = false;
+      bool touch_of_rancora_casted = false;
       bool flames_of_xoroth_dd = false;
       bool flames_of_xoroth_td = false;
 
@@ -84,6 +85,7 @@ using namespace helpers;
       // Diabolist
       bool diabolic_ritual = false;
       bool demonic_art = false;
+      bool demonic_art_buff = false;
       bool rancora_cb_bonus = false;
     } triggers;
 
@@ -130,8 +132,7 @@ using namespace helpers;
       affected_by.xalans_cruelty_td = data().affected_by( p->hero.xalans_cruelty->effectN( 4 ) );
       affected_by.xalans_cruelty_crit = data().affected_by( p->hero.xalans_cruelty->effectN( 1 ) );
 
-      if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
-        affected_by.master_summoner = data().affected_by( p->talents.master_summoner->effectN( 2 ) );
+      affected_by.master_summoner = data().affected_by( p->talents.master_summoner->effectN( 2 ) );
 
       triggers.decimation = p->talents.decimation.ok();
     }
@@ -207,7 +208,8 @@ using namespace helpers;
           if ( destruction() )
             adjustment = -timespan_t::from_seconds( p()->hero.diabolic_ritual->effectN( 2 ).base_value() );
 
-          if ( demonology() && p()->hero.infernal_machine.ok() && p()->warlock_pet_list.demonic_tyrants.n_active_pets() > 0 )
+          // TOCHECK: 2025-08-16 Currently Infernal Machine talent is bugged for Demonology and does not work
+          if ( demonology() && !p()->bugs && p()->hero.infernal_machine.ok() && p()->warlock_pet_list.demonic_tyrants.n_active_pets() > 0 )
             adjustment += -p()->hero.infernal_machine->effectN( 1 ).time_value();
 
           if ( destruction() && p()->hero.infernal_machine.ok() && p()->warlock_pet_list.infernals.n_active_pets() > 0 )
@@ -270,7 +272,8 @@ using namespace helpers;
       if ( p()->talents.rolling_havoc.ok() && use_havoc() )
         p()->buffs.rolling_havoc->trigger();
 
-      if ( diabolist() && triggers.demonic_art )
+      // NOTE: Casted spells do not consume any Demonic Art buff if none were active at the start of the cast
+      if ( diabolist() && triggers.demonic_art && triggers.demonic_art_buff )
       {
         if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B2 ) )
           make_event( *sim, 0_ms, [ this ] {
@@ -496,16 +499,11 @@ using namespace helpers;
       double m = spell_t::composite_persistent_multiplier( s );
 
       // Demonology only has Hand of Gul'dan affected by Touch of Rancora, which requires special handling
-      if ( diabolist() && destruction() && affected_by.touch_of_rancora )
+      // Spells affected by touch_of_rancora_casted use a custom action_state_t and require special handling
+      if ( diabolist() && destruction() && affected_by.touch_of_rancora && !affected_by.touch_of_rancora_casted )
       {
-        if ( p()->buffs.art_overlord->check() )
-          m *= 1.0 + p()->hero.touch_of_rancora->effectN( 1 ).percent();
-
-        if ( p()->buffs.art_mother->check() )
-          m *= 1.0 + p()->hero.touch_of_rancora->effectN( 1 ).percent();
-
-        if ( p()->buffs.art_pit_lord->check() )
-          m *= 1.0 + p()->hero.touch_of_rancora->effectN( 1 ).percent();
+        if ( p()->buffs.art_overlord->check() || p()->buffs.art_mother->check() || p()->buffs.art_pit_lord->check() )
+            m *= 1.0 + p()->hero.touch_of_rancora->effectN( 1 ).percent();
       }
 
       return m;
@@ -602,13 +600,7 @@ using namespace helpers;
 
       if ( diabolist() && affected_by.touch_of_rancora )
       {
-        if ( p()->buffs.art_overlord->check() )
-          m *= 1.0 + p()->hero.touch_of_rancora->effectN( 2 ).percent();
-
-        if ( p()->buffs.art_mother->check() )
-          m *= 1.0 + p()->hero.touch_of_rancora->effectN( 2 ).percent();
-
-        if ( p()->buffs.art_pit_lord->check() )
+        if ( p()->buffs.art_overlord->check() || p()->buffs.art_mother->check() || p()->buffs.art_pit_lord->check() )
           m *= 1.0 + p()->hero.touch_of_rancora->effectN( 2 ).percent();
       }
 
@@ -706,7 +698,8 @@ using namespace helpers;
 
       if ( destruction() && affected_by.havoc )
       {
-        base_aoe_multiplier *= p()->talents.havoc_debuff->effectN( 1 ).percent() + p()->hero.gloom_of_nathreza->effectN( 2 ).percent();
+        // TOCHECK: 2025-08-27 Currently Gloom of Nathreza talent is bugged for Destruction and does not work
+        base_aoe_multiplier *= p()->talents.havoc_debuff->effectN( 1 ).percent() + ( !p()->bugs ? p()->hero.gloom_of_nathreza->effectN( 2 ).percent() : 0.0 );
         p()->havoc_spells.push_back( this );
       }
 
@@ -841,29 +834,9 @@ using namespace helpers;
 
   struct drain_life_t : public warlock_spell_t
   {
-
-    // Note: Soul Rot (Affliction talent) turns Drain Life into a multi-target channeled spell. Nothing else in simc behaves this way and
-    // we currently do not have core support for it. Applying this dot to the secondary targets should cover most of the behavior, although
-    // it will be unable to handle the case where primary channel target dies (in-game, this appears to force-swap primary target to another
-    // target currently affected by Drain Life if possible).
-    struct drain_life_dot_t : public warlock_spell_t
-    {
-      drain_life_dot_t( warlock_t* p )
-        : warlock_spell_t( "Drain Life (AoE)", p, p->warlock_base.drain_life )
-      { dual = background = true; }
-
-      double cost_per_tick( resource_e ) const override
-      { return 0.0; }
-    };
-    
-    drain_life_dot_t* aoe_dot;
-
     drain_life_t( warlock_t* p, util::string_view options_str )
       : warlock_spell_t( "Drain Life", p, p->warlock_base.drain_life, options_str )
     {
-      aoe_dot = new drain_life_dot_t( p );
-      add_child( aoe_dot );
-
       channeled = true;
     }
 
@@ -871,51 +844,7 @@ using namespace helpers;
     {
       warlock_spell_t::execute();
 
-      if ( p()->talents.soul_rot.ok() && p()->buffs.soul_rot->check() )
-      {
-        const auto& tl = target_list();
-
-        for ( auto& t : tl )
-        {
-          // Don't apply AoE version to primary target
-          if ( t == target )
-            continue;
-
-          if ( td( t )->dots_soul_rot->is_ticking() )
-            aoe_dot->execute_on_target( t );
-        }
-      }
-
       p()->buffs.soulburn->expire();
-    }
-
-    double cost_per_tick( resource_e r ) const override
-    {
-      if ( r == RESOURCE_MANA && p()->buffs.soul_rot->check() )
-        return 0.0;
-
-      return warlock_spell_t::cost_per_tick( r );
-    }
-
-    void last_tick( dot_t* d ) override
-    {
-      bool early_cancel = d->remains() > 0_ms;
-
-      warlock_spell_t::last_tick( d );
-
-      // If this is the end of the channel, the AoE DoTs will expire correctly
-      // Otherwise, we need to cancel them on the spot
-      if ( p()->talents.soul_rot.ok() && early_cancel )
-      {
-        const auto& tl = target_list();
-
-        for ( auto& t : tl )
-        {
-          auto data = td( t );
-          if ( data->dots_drain_life_aoe->is_ticking() )
-            data->dots_drain_life_aoe->cancel();
-        }
-      }
     }
   };
 
@@ -980,7 +909,8 @@ using namespace helpers;
       base_dd_multiplier *= 1.0 + p->talents.siphon_life->effectN( 1 ).percent();
       base_dd_multiplier *= 1.0 + p->talents.kindled_malice->effectN( 2 ).percent();
 
-      affected_by.deaths_embrace = p->talents.deaths_embrace.ok();
+      // 2025-08-27: Death's Embrace talent is not applying to the Corruption (direct damage) spell (bug)
+      affected_by.deaths_embrace = p->bugs ? false : p->talents.deaths_embrace.ok();
     }
 
     dot_t* get_dot( player_t* t ) override
@@ -1062,10 +992,10 @@ using namespace helpers;
           p()->proc_actions.wicked_reaping->execute_on_target( target );
 
         if ( p()->hero.quietus.ok() && p()->hero.shared_fate.ok() )
-          td( target )->debuffs_shared_fate->trigger();
+          p()->proc_actions.shared_fate->execute_on_target( target );
 
-        if ( p()->hero.quietus.ok() && p()->hero.feast_of_souls.ok() && rng().roll( p()->rng_settings.feast_of_souls.setting_value ) )
-          p()->feast_of_souls_gain();;
+        if ( p()->hero.quietus.ok() && p()->hero.feast_of_souls.ok() && rng().roll( p()->rng_settings.feast_of_souls_aff.setting_value ) )
+          p()->feast_of_souls_gain();
       }
 
       if ( time_to_execute == 0_ms )
@@ -1350,8 +1280,23 @@ using namespace helpers;
           }
         }
 
+        // Seeds of their Demise collapse conditions must be checked periodically for every Wither tick
+        if ( !td( d->target )->debuffs_blackened_soul->check() )
+        {
+          bool collapse = false;
+          collapse = collapse || ( p()->hero.seeds_of_their_demise.ok() && d->current_stack() > 1 && d->target->health_percentage() <= p()->hero.seeds_of_their_demise->effectN( 2 ).base_value() ) ;
+          collapse = collapse || ( p()->hero.seeds_of_their_demise.ok() && d->current_stack() >= as<int>( p()->hero.seeds_of_their_demise->effectN( 1 ).base_value() ) );
+          if ( collapse )
+          {
+            td( d->target )->debuffs_blackened_soul->trigger();
+            p()->sim->print_debug( "{} wither stack collapse in {} started (seeds of their demise) (wither tick check). wither_current_stack={}, wither_target_health_percentage={:.2f}%",
+                                   p()->name(), d->target->name(), d->current_stack(), d->target->health_percentage() );
+          }
+        }
+
         if ( d->state->result == RESULT_CRIT && p()->hero.mark_of_perotharn.ok() && rng().roll( p()->rng_settings.mark_of_perotharn.setting_value ) )
         {
+          // Wither stack gain by Mark of Perotharn does not directly trigger collapse in that tick (it will be trigged on the next tick)
           d->increment( 1 );
           p()->procs.mark_of_perotharn->occur();
         }
@@ -1362,8 +1307,26 @@ using namespace helpers;
         double m = warlock_spell_t::composite_crit_damage_bonus_multiplier();
 
         m *= 1.0 + p()->hero.mark_of_perotharn->effectN( 1 ).percent();
+        // Mark of Perotharn is being applied twice in what appears to be a bug
+        m *= 1.0 + ( p()->bugs ? p()->hero.mark_of_perotharn->effectN( 1 ).percent() : 0.0 );
 
         return m;
+      }
+
+      void trigger_dot( action_state_t* s ) override
+      {
+        warlock_spell_t::trigger_dot( s );
+
+        timespan_t duration = composite_dot_duration( s );
+        if ( duration <= timespan_t::zero() )
+          return;
+
+        auto& dot = td( s->target )->dots_wither;
+        // In simc dots increase their stack count when refreshed.
+        // Ingame, however, Wither does not increase stacks on dot refresh.
+        // Therefore, its stack count should be decreased by 1 after refreshing to match ingame behavior.
+        if ( dot->is_ticking() && dot->current_stack() > 1 )
+          dot->decrement( 1 );
       }
     };
 
@@ -1411,6 +1374,7 @@ using namespace helpers;
 
       if ( s->result == RESULT_CRIT && p()->hero.mark_of_perotharn.ok() && rng().roll( p()->rng_settings.mark_of_perotharn.setting_value ) )
       {
+        // Wither stack gain by Mark of Perotharn does not directly trigger collapse (it will be trigged on the next Wither tick)
         td( s->target )->dots_wither->increment( 1 );
         p()->procs.mark_of_perotharn->occur();
       }
@@ -1421,6 +1385,8 @@ using namespace helpers;
       double m = warlock_spell_t::composite_crit_damage_bonus_multiplier();
 
       m *= 1.0 + p()->hero.mark_of_perotharn->effectN( 1 ).percent();
+      // TOCHECK: 2025-08-16 Mark of Perotharn is being applied twice in what appears to be a bug
+      m *= 1.0 + ( p()->bugs ? p()->hero.mark_of_perotharn->effectN( 1 ).percent() : 0.0 );
 
       return m;
     }
@@ -1461,17 +1427,32 @@ using namespace helpers;
       return m;
     }
 
+    void execute() override
+    {
+      // Wither stack decrement is done before damage. Relevant for Mark of Xavius talent.
+      // (e.g.) Blackened Soul where 10 to 9 stacks: Mark of Xavius talent bonus damage is calculated on 9 stacks.
+      if ( td( target )->dots_wither->current_stack() > 1 && !p()->buffs.maintained_withering->check() )
+        td( target )->dots_wither->decrement( 1 );
+
+      warlock_spell_t::execute();
+    }
+
     void impact( action_state_t* s ) override
     {
       warlock_spell_t::impact( s );
 
       player_t* tar = s->target;
 
-      if ( td( tar )->dots_wither->current_stack() > 1 && !p()->buffs.maintained_withering->check() )
-        td( tar )->dots_wither->decrement( 1 );
-
       if ( td( tar )->dots_wither->current_stack() <= 1 )
-        make_event( *sim, 0_ms, [ this, tar ] { td( tar )->debuffs_blackened_soul->expire(); } );
+      {
+        make_event( *sim, 0_ms, [ this, tar ] {
+          if ( td( tar )->debuffs_blackened_soul->check() )
+          {
+            td( tar )->debuffs_blackened_soul->expire();
+            p()->sim->print_debug( "{} wither stack collapse in {} ended. wither_current_stack={}", p()->name(), tar->name(), td( tar )->dots_wither->current_stack() );
+          }
+        } );
+      }
 
       bool seeds_triggered = false;
 
@@ -1545,8 +1526,9 @@ using namespace helpers;
     {
       background = dual = true;
 
-      affected_by.potent_afflictions_td = affliction(); // Note: Technically Soul Anathema is on a separate effect from the others.
-      affected_by.master_demonologist_dd = demonology();
+      // Affected by Demonology/Affliction mastery
+      affected_by.master_demonologist_dd = demonology();  
+      affected_by.potent_afflictions_td = affliction();   // Note: Technically Soul Anathema is on a separate effect from the others.
 
       base_td_multiplier *= 1.0 + p->hero.quietus->effectN( 1 ).percent();
       base_tick_time *= 1.0 + p->hero.quietus->effectN( 2 ).percent();
@@ -1566,6 +1548,7 @@ using namespace helpers;
     {
       background = dual = true;
 
+      // Affected by Demonology mastery, but not by Affliction mastery
       affected_by.master_demonologist_dd = demonology(); // Note: Technically Demonic Soul is on a separate effect from the others.
       affected_by.shadowtouched = false; // Note: We set this to false because we will handle it in the overridden 'composite_target_multiplier' function
 
@@ -1604,24 +1587,13 @@ using namespace helpers;
 
   struct shared_fate_t : public warlock_spell_t
   {
-    double tick_factor;
-
     shared_fate_t( warlock_t* p )
-      : warlock_spell_t( "Shared Fate", p, p->hero.shared_fate_dmg )
+      : warlock_spell_t( "Shared Fate", p, p->hero.shared_fate_dot )
     {
+      aoe = -1; // DoT is applied in AoE
       background = dual = true;
-      aoe = -1;
-      reduced_aoe_targets = p->hero.shared_fate->effectN( 1 ).base_value();
-      tick_factor = 1.0;
-    }
 
-    double composite_da_multiplier( const action_state_t* s ) const override
-    {
-      double m = warlock_spell_t::composite_da_multiplier( s );
-
-      m *= tick_factor;
-
-      return m;
+      // Unaffected by Affliction/Demonology mastery
     }
   };
 
@@ -1634,6 +1606,7 @@ using namespace helpers;
     {
       background = dual = true;
 
+      // Affected by Demonology mastery, but not by Affliction mastery
       affected_by.master_demonologist_dd = demonology();
       affected_by.shadowtouched = false; // Note: We set this to false because we will handle it in the overridden 'composite_target_multiplier' function
 
@@ -1691,7 +1664,8 @@ using namespace helpers;
       {
         double m = warlock_spell_t::composite_da_multiplier( s );
 
-        if ( soul_harvester() && p()->buffs.succulent_soul->check() )
+        // TOCHECK: 2025-08-27 In-game a stack gets consumed before MT hits (bug), doing it like this is easier
+        if ( soul_harvester() && p()->buffs.succulent_soul->check() > ( p()->bugs ? 1 : 0 ) )
           m *= 1.0 + p()->hero.succulent_soul->effectN( 2 ).percent();
 
         return m;
@@ -1708,7 +1682,10 @@ using namespace helpers;
         target_count( 0 )
       {
         background = dual = true;
-        callbacks = false; // Individual hits have been observed to not proc trinkets like Psyche Shredder
+        // 2025/08/10 Confirmed Malefic Rapture damage will feed Temporal Wound callback from Evoker. If this does not
+        // work with specific trinkets it will likely need specific handling, or the simc proc system as a whole needs
+        // an overriding.
+        // callbacks = false;
 
         base_dd_multiplier *= 1.0 + p->talents.kindled_malice->effectN( 1 ).percent();
         base_dd_multiplier *= 1.0 + p->talents.improved_malefic_rapture->effectN( 1 ).percent();
@@ -1849,9 +1826,6 @@ using namespace helpers;
     {
       warlock_spell_t::execute();
 
-      if ( p()->talents.malign_omen.ok() && p()->buffs.malign_omen->check() )
-        p()->buffs.soul_rot->extend_duration( p(), timespan_t::from_seconds( p()->talents.malign_omen_buff->effectN( 2 ).base_value() ) );
-
       if ( active_4pc( TWW1 ) )
       {
         bool success = p()->buffs.umbral_lattice->trigger();
@@ -1866,9 +1840,9 @@ using namespace helpers;
 
     void impact( action_state_t* s ) override
     {
-      warlock_spell_t::impact( s );
-
       debug_cast<malefic_rapture_damage_t*>( impact_action )->target_count = as<int>( s->n_targets );
+
+      warlock_spell_t::impact( s );
 
       if ( soul_harvester() && p()->buffs.succulent_soul->check() )
       {
@@ -2239,8 +2213,9 @@ using namespace helpers;
 
       std::ostringstream& debug_str( std::ostringstream& s ) override
       {
-        action_state_t::debug_str( s ) << " tick_time_multiplier=" << tick_time_multiplier;
-        action_state_t::debug_str( s ) << " td_multiplier=" << td_multiplier;
+        action_state_t::debug_str( s );
+        s << " tick_time_multiplier=" << tick_time_multiplier;
+        s << " td_multiplier=" << td_multiplier;
         return s;
       }
 
@@ -2271,8 +2246,11 @@ using namespace helpers;
 
     void snapshot_state( action_state_t* s, result_amount_type rt ) override
     {
-      debug_cast<drain_soul_state_t*>( s )->tick_time_multiplier = 1.0 + ( p()->buffs.nightfall->check() ? p()->talents.nightfall_buff->effectN( 3 ).percent() : 0 );
-      debug_cast<drain_soul_state_t*>( s )->td_multiplier = 1.0 + ( p()->buffs.nightfall->check() ? p()->talents.nightfall_buff->effectN( 2 ).percent() + p()->hero.necrolyte_teachings->effectN( 1 ).percent() : 0 );
+      //11.1 onward, nightfall has not buffed hc ds dmg
+      double mul = ( p()->bugs && hellcaller() ) ? 0.0 : ( p()->talents.nightfall_buff->effectN( 2 ).percent() + p()->hero.necrolyte_teachings->effectN( 1 ).percent() );
+
+      debug_cast<drain_soul_state_t*>( s )->tick_time_multiplier = 1.0 + ( p()->buffs.nightfall->check() ? p()->talents.nightfall_buff->effectN( 3 ).percent() : 0.0 );
+      debug_cast<drain_soul_state_t*>( s )->td_multiplier = 1.0 + ( p()->buffs.nightfall->check() ? mul : 0.0 );
       warlock_spell_t::snapshot_state( s, rt );
     }
 
@@ -2305,9 +2283,9 @@ using namespace helpers;
           p()->proc_actions.wicked_reaping->execute_on_target( target );
 
         if ( p()->hero.quietus.ok() && p()->hero.shared_fate.ok() )
-          td( target )->debuffs_shared_fate->trigger();
+          p()->proc_actions.shared_fate->execute_on_target( target );
 
-        if ( p()->hero.quietus.ok() && p()->hero.feast_of_souls.ok() && rng().roll( p()->rng_settings.feast_of_souls.setting_value ) )
+        if ( p()->hero.quietus.ok() && p()->hero.feast_of_souls.ok() && rng().roll( p()->rng_settings.feast_of_souls_aff.setting_value ) )
           p()->feast_of_souls_gain();
       }
       p()->buffs.nightfall->decrement();
@@ -2385,6 +2363,41 @@ using namespace helpers;
     {
       impact_action = new vile_taint_dot_t( p );
       add_child( impact_action );
+    }
+
+     std::vector<player_t*>& target_list() const override
+    {
+      auto& tl              = warlock_spell_t::target_list();
+      auto original_size    = tl.size();
+
+      // if target_list is bigger than dot cap shuffle the list
+      if ( as<int>( tl.size() ) > aoe )
+      {
+        // randomize targets
+        rng().shuffle( tl.begin(), tl.end() );
+
+        // sort targets without Agony to the front
+        std::sort( tl.begin(), tl.end(), [ this ]( player_t* l, player_t* r ) {
+          warlock_td_t* tdl = p()->get_target_data( l );
+          warlock_td_t* tdr = p()->get_target_data( r );
+
+          return !tdl->dots_agony->is_ticking() && tdr->dots_agony->is_ticking();
+          
+        } );
+
+        // resize to dot target cap
+        tl.resize( aoe );
+      }
+
+      player->sim->print_debug( "{} vile taint dots {} targets of the available {}.", p()->name(), tl.size(),
+                                original_size );
+
+      return tl;
+    }
+    void execute() override
+    {
+      target_cache.is_valid = false;
+      warlock_spell_t::execute();
     }
 
     void impact( action_state_t* s ) override
@@ -2543,8 +2556,6 @@ using namespace helpers;
       timespan_t darkglare_extension = timespan_t::from_seconds( p()->talents.summon_darkglare->effectN( 2 ).base_value() );
 
       darkglare_extension_helper( darkglare_extension );
-
-      p()->buffs.soul_rot->extend_duration( p(), darkglare_extension ); // This dummy buff is active while Soul Rot is ticking
     }
 
     void darkglare_extension_helper( timespan_t darkglare_extension )
@@ -2583,16 +2594,21 @@ using namespace helpers;
     {
       warlock_spell_t::execute();
 
-      if ( !p()->min_version_check( VERSION_11_1_0 ) )
-        p()->buffs.soul_rot->trigger();
-
       if ( p()->talents.malign_omen.ok() )
         p()->buffs.malign_omen->trigger( as<int>( p()->talents.malign_omen->effectN( 2 ).base_value() ) );
 
       if ( soul_harvester() && p()->hero.shadow_of_death.ok() )
       {
-        p()->resource_gain( RESOURCE_SOUL_SHARD, p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0, p()->gains.shadow_of_death );
+        // TOCHECK: 2025-08-27 The shards gained by Shadow of Death can also proc another Succulent Soul each (bug?)
+        if ( p()->bugs )
+          p()->resource_gain( RESOURCE_SOUL_SHARD, p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0, p()->gains.shadow_of_death );
+        else
+          p()->player_t::resource_gain( RESOURCE_SOUL_SHARD, p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0, p()->gains.shadow_of_death );
+
         p()->buffs.succulent_soul->trigger( as<int>( p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0 ) );
+        for ( int i = 0; i < as<int>( p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0 ); i++)
+          p()->procs.succulent_soul->occur();
+
         if ( p()->sets->has_set_bonus( HERO_SOUL_HARVESTER, TWW3, B2 ) && p()->tier.rampaging_demonic_soul->ok() )
         {
           p()->warlock_pet_list.demonic_souls.spawn( p()->tier.rampaging_demonic_soul->duration() );
@@ -2643,6 +2659,40 @@ using namespace helpers;
 
   struct hand_of_guldan_t : public warlock_spell_t
   {
+    struct hand_of_guldan_state_t : public action_state_t
+    {
+      bool demonic_art_buffed;
+      bool rancora_empowered;
+
+      hand_of_guldan_state_t( action_t* action, player_t* target )
+        : action_state_t( action, target ),
+        demonic_art_buffed( false ),
+        rancora_empowered( false )
+      { }
+
+      void initialize() override
+      {
+        action_state_t::initialize();
+        demonic_art_buffed = false;
+        rancora_empowered = false;
+      }
+
+      std::ostringstream& debug_str( std::ostringstream& s ) override
+      {
+        action_state_t::debug_str( s );
+        s << " demonic_art_buffed=" << demonic_art_buffed;
+        s << " rancora_empowered=" << rancora_empowered;
+        return s;
+      }
+
+      void copy_state( const action_state_t* s ) override
+      {
+        action_state_t::copy_state( s );
+        demonic_art_buffed = debug_cast<const hand_of_guldan_state_t*>( s )->demonic_art_buffed;
+        rancora_empowered = debug_cast<const hand_of_guldan_state_t*>( s )->rancora_empowered;
+      }
+    };
+
     struct umbral_blaze_dot_t : public warlock_spell_t
     {
       umbral_blaze_dot_t( warlock_t* p )
@@ -2656,22 +2706,73 @@ using namespace helpers;
 
     struct hog_impact_t : public warlock_spell_t
     {
-      int shards_used;
+      struct hogi_state_t {
+        int shards_used;
+        bool rancora_empowered;
+        int first_hit_random_target;
+        bool allow_umbral_blaze;
+        bool allow_succulent_soul;
+
+        hogi_state_t()
+          : shards_used( 0 ),
+          rancora_empowered( false ),
+          first_hit_random_target( 0 ),
+          allow_umbral_blaze( true ),
+          allow_succulent_soul( true )
+        { }
+      };
+
+      struct hog_impact_state_t : public action_state_t
+      {
+        hogi_state_t state;
+
+        hog_impact_state_t( action_t* action, player_t* target )
+          : action_state_t( action, target ),
+          state()
+        { }
+
+        void initialize() override
+        {
+          action_state_t::initialize();
+          state.shards_used = 0;
+          state.rancora_empowered = false;
+          state.first_hit_random_target = 0;
+          state.allow_umbral_blaze = true;
+          state.allow_succulent_soul = true;
+        }
+
+        std::ostringstream& debug_str( std::ostringstream& s ) override
+        {
+          action_state_t::debug_str( s );
+          s << " shards_used=" << state.shards_used;
+          s << " rancora_empowered=" << state.rancora_empowered;
+          s << " first_hit_random_target=" << state.first_hit_random_target;
+          s << " allow_umbral_blaze=" << state.allow_umbral_blaze;
+          s << " allow_succulent_soul=" << state.allow_succulent_soul;
+          return s;
+        }
+
+        void copy_state( const action_state_t* s ) override
+        {
+          action_state_t::copy_state( s );
+          state = debug_cast<const hog_impact_state_t*>( s )->state;
+        }
+      };
+
       timespan_t meteor_time;
+      hogi_state_t state;
       umbral_blaze_dot_t* blaze;
 
       hog_impact_t( warlock_t* p )
         : warlock_spell_t( "Hand of Gul'dan (Impact)", p, p->warlock_base.hog_impact ),
-        shards_used( 0 ),
         meteor_time( 400_ms )
       {
         aoe = -1;
         dual = true;
 
-        affected_by.touch_of_rancora = p->hero.touch_of_rancora.ok();
-        
-        triggers.shadow_invocation = true;
-        triggers.demonic_art = p->hero.diabolic_ritual.ok();
+        affected_by.touch_of_rancora = affected_by.touch_of_rancora_casted = p->hero.touch_of_rancora.ok();
+
+        triggers.shadow_invocation = true;  // all HoG impacts can proc SI, including the ones from Ruination and Pact of the Imp Mother
 
         if ( p->talents.umbral_blaze.ok() )
         {
@@ -2680,8 +2781,58 @@ using namespace helpers;
         }
       }
 
+      action_state_t* new_state() override
+      { return new hog_impact_state_t( this, target ); }
+
+      void snapshot_state( action_state_t* s, result_amount_type rt ) override
+      {
+        debug_cast<hog_impact_state_t*>( s )->state = state;
+        warlock_spell_t::snapshot_state( s, rt );
+      }
+
       timespan_t travel_time() const override
       { return meteor_time; }
+
+      double composite_da_multiplier( const action_state_t* s ) const override
+      {
+        double m = warlock_spell_t::composite_da_multiplier( s );
+
+        int first_hit_random_target = debug_cast<const hog_impact_state_t*>( s )->state.first_hit_random_target;
+
+        // TOCHECK: 2025-08-16 Due to a bug, Succulent Soul only affects one of the targets hit in AoE
+        bool allow_succulent_soul = debug_cast<const hog_impact_state_t*>( s )->state.allow_succulent_soul;
+        if ( soul_harvester() && allow_succulent_soul && p()->buffs.succulent_soul->check() && ( !p()->bugs || s->chain_target == first_hit_random_target ) )
+          m *= 1.0 + p()->hero.succulent_soul->effectN( 3 ).percent();
+
+        // Touch of Rancora only affects one of HoG's hits in AoE (bug?), randomly selected
+        bool rancora_empowered = debug_cast<const hog_impact_state_t*>( s )->state.rancora_empowered;
+        if ( diabolist() && affected_by.touch_of_rancora && rancora_empowered && ( !p()->bugs || s->chain_target == first_hit_random_target ) )
+        {
+          // NOTE: Touch of Rancora is a +100% ADDITION to the MULTIPLIER (bug?), we currently believe this must be done at the end of action_multiplier() calculation
+          if ( p()->bugs )
+          {
+            // At this point, this 'm *= ( X + A ) / A' adjustment is equivalent to ADDITIVELY applying the multiplier 'X' to 'm' just after A
+            // (a.k.a. action_multiplier) but before action_da_multiplier and the subsequent multipliers of warlock_spell_t::composite_da_multiplier
+            const double mult_am = action_multiplier();
+            m *= ( mult_am != 0.0 ) ? ( ( p()->hero.touch_of_rancora->effectN( 1 ).percent() + mult_am ) / mult_am ) : 0.0;
+          }
+          else
+          {
+            m *= 1.0 + p()->hero.touch_of_rancora->effectN( 1 ).percent();
+          }
+        }
+
+        return m;
+      }
+
+      void execute() override
+      {
+        // NOTE: Some effects only affects one of HoG's hits in AoE (bug?), randomly selected
+        const std::vector<player_t*>& tl = target_list();
+        state.first_hit_random_target = rng().range( as<int>( tl.size() ) );
+
+        warlock_spell_t::execute();
+      }
 
       double action_multiplier() const override
       {
@@ -2690,25 +2841,9 @@ using namespace helpers;
         double gloom = 0.0;
 
         if ( p()->hero.gloom_of_nathreza.ok() )
-           gloom = shards_used * p()->hero.gloom_of_nathreza->effectN( 1 ).percent();
+           gloom = state.shards_used * p()->hero.gloom_of_nathreza->effectN( 1 ).percent();
 
-        m *= shards_used * ( 1.0 + gloom );
-
-        if ( soul_harvester() && p()->buffs.succulent_soul->check() )
-          m *= 1.0 + p()->hero.succulent_soul->effectN( 3 ).percent();
-
-        // NOTE: Touch of Rancora is a +100% ADDITION to the MULTIPLIER, we currently believe this must be done at the end of calculation
-        if ( diabolist() && affected_by.touch_of_rancora )
-        {
-          if ( p()->buffs.art_overlord->check() )
-            m += p()->hero.touch_of_rancora->effectN( 1 ).percent();
-
-          if ( p()->buffs.art_mother->check() )
-            m += p()->hero.touch_of_rancora->effectN( 1 ).percent();
-
-          if ( p()->buffs.art_pit_lord->check() )
-            m += p()->hero.touch_of_rancora->effectN( 1 ).percent();
-        }
+        m *= state.shards_used * ( 1.0 + gloom );
 
         return m;
       }
@@ -2725,13 +2860,13 @@ using namespace helpers;
           // Current behavior: HoG will spawn a meteor on cast finish. Travel time in spell data is 0.7 seconds.
           // However, damage event occurs before spell effect lands, happening 0.4 seconds after cast.
           // Imps then spawn roughly every 0.18 seconds seconds after the damage event.
-          for ( int i = 1; i <= shards_used; i++ )
+          for ( int i = 1; i <= debug_cast<hog_impact_state_t*>( s )->state.shards_used; i++ )
           {
             auto ev = make_event<imp_delay_event_t>( *sim, p(), rng().gauss( 180.0 * i, 25.0 ), 180.0 * i );
             p()->wild_imp_spawns.push_back( ev );
           }
 
-          if ( p()->talents.umbral_blaze.ok() && rng().roll( p()->talents.umbral_blaze->effectN( 1 ).percent() ) )
+          if ( p()->talents.umbral_blaze.ok() && debug_cast<hog_impact_state_t*>( s )->state.allow_umbral_blaze && rng().roll( p()->talents.umbral_blaze->effectN( 1 ).percent() ) )
           {
             blaze->execute_on_target( s->target );
             p()->procs.umbral_blaze->occur();
@@ -2739,7 +2874,9 @@ using namespace helpers;
         }
 
         // We need Demonic Soul to proc on every target, but buff is decremented on impact. Fudge this by 1ms to ensure all targets are hit.
-        if ( soul_harvester() && p()->buffs.succulent_soul->check() )
+        // TOCHECK: 2025-08-16 Due to a bug, Succulent Soul only affects one of the targets hit in AoE
+        // We keep the original buff decrement behavior and handle this bug from 'composite_da_multiplier()'
+        if ( soul_harvester() && debug_cast<hog_impact_state_t*>( s )->state.allow_succulent_soul && p()->buffs.succulent_soul->check() )
         {
           bool primary = ( s->chain_target == 0 );
 
@@ -2758,13 +2895,16 @@ using namespace helpers;
       : warlock_spell_t( "Hand of Gul'dan", p, p->warlock_base.hand_of_guldan, options_str ),
       impact_spell( new hog_impact_t( p ) )
     {
-      affected_by.touch_of_rancora = p->hero.touch_of_rancora.ok();
+      affected_by.touch_of_rancora = affected_by.touch_of_rancora_casted = p->hero.touch_of_rancora.ok();
 
-      triggers.diabolic_ritual = p->hero.diabolic_ritual.ok();
+      triggers.diabolic_ritual = triggers.demonic_art = p->hero.diabolic_ritual.ok();
       triggers.jackpot_demonology = true;
 
       add_child( impact_spell );
     }
+
+    action_state_t* new_state() override
+    { return new hand_of_guldan_state_t( this, target ); }
 
     timespan_t travel_time() const override
     { return 0_ms; }
@@ -2780,17 +2920,50 @@ using namespace helpers;
       return warlock_spell_t::ready();
     }
 
+    void schedule_execute( action_state_t* s ) override
+    {
+      // NOTE: Any of the Demonic Art buffs must be present when the cast begins for the spell to be empowered by Touch of Rancora
+      // and/or for the Demonic Art buff to be consumed upon executing the spell
+      if ( diabolist() && triggers.demonic_art )
+      {
+        action_state_t*& action_state = s ? s : pre_execute_state;
+        if ( !action_state )
+          action_state = get_state();
+
+        const bool demonic_art_buff_up = p()->buffs.art_overlord->check() || p()->buffs.art_mother->check() || p()->buffs.art_pit_lord->check();
+        debug_cast<hand_of_guldan_state_t*>( action_state )->demonic_art_buffed = demonic_art_buff_up;
+        debug_cast<hand_of_guldan_state_t*>( action_state )->rancora_empowered = affected_by.touch_of_rancora && demonic_art_buff_up;
+      }
+
+      warlock_spell_t::schedule_execute( s );
+    }
+
     void execute() override
     {
       int shards_used = as<int>( cost() );
-      impact_spell->shards_used = shards_used;
+      impact_spell->state.shards_used = shards_used;
+      if ( pre_execute_state )
+      {
+        snapshot_state( pre_execute_state, amount_type( pre_execute_state ) );
+        // An incoming rancora empowered casted spell will remain empowered even if the Demonic Art buff falls off during cast
+        impact_spell->state.rancora_empowered = debug_cast<hand_of_guldan_state_t*>( pre_execute_state )->rancora_empowered;
+        // Casted spells do not consume any Demonic Art buff if none were active at the start of the cast
+        triggers.demonic_art_buff = debug_cast<hand_of_guldan_state_t*>( pre_execute_state )->demonic_art_buffed;
+      }
+      else
+      {
+        impact_spell->state.rancora_empowered = false;
+        triggers.demonic_art_buff = false;
+      }
+      impact_spell->state.allow_umbral_blaze = true;
+      impact_spell->state.allow_succulent_soul = true;
 
       warlock_spell_t::execute();
 
       if ( p()->talents.dread_calling.ok() )
         p()->buffs.dread_calling->trigger( shards_used );
 
-      if ( p()->talents.doom.ok() && p()->min_version_check( VERSION_11_1_0 ) )
+      if ( p()->talents.doom.ok() )
       {
         for ( const auto t : p()->sim->target_non_sleeping_list )
         {
@@ -2845,7 +3018,14 @@ using namespace helpers;
 
       if ( p()->talents.pact_of_the_imp_mother.ok() && rng().roll( p()->talents.pact_of_the_imp_mother->effectN( 1 ).percent() ) )
       {
-        make_event( *sim, 0_ms, [ this, t = target ] { impact_spell->execute_on_target( t ); } );
+        make_event( *sim, rng().gauss( impact_spell->travel_time(), timespan_t::from_seconds( sim->travel_variance ) ),
+          [ this, t = target, su = impact_spell->state.shards_used ] {
+            impact_spell->state.shards_used = su;
+            impact_spell->state.rancora_empowered = false;    // Pact of the Imp Mother extra HoG is never rancora empowered
+            impact_spell->state.allow_umbral_blaze = false;   // Pact of the Imp Mother extra HoG can't proc umbral blaze
+            impact_spell->state.allow_succulent_soul = false; // Pact of the Imp Mother extra HoG can't benefit from succulent soul
+            impact_spell->execute_on_target( t );
+          } );
         p()->procs.pact_of_the_imp_mother->occur();
       }
     }
@@ -2933,15 +3113,6 @@ using namespace helpers;
           if ( active_pet->pet_type == PET_FELGUARD )
             debug_cast<pets::demonology::felguard_pet_t*>( active_pet )->hatred_proc->execute_on_target( execute_state->target );
         }
-
-        if ( p()->talents.doom.ok() && !p()->min_version_check( VERSION_11_1_0 ) )
-        {
-          for ( const auto t : p()->sim->target_non_sleeping_list )
-          {
-            if ( td( t )->debuffs_doom->check() )
-              td( t )->debuffs_doom->extend_duration( p(), -p()->talents.doom->effectN( 1 ).time_value() - p()->talents.doom_eternal->effectN( 1 ).time_value() );
-          }
-        }
       }
       else
       {
@@ -2960,9 +3131,9 @@ using namespace helpers;
           p()->proc_actions.wicked_reaping->execute_on_target( target );
 
         if ( p()->hero.quietus.ok() && p()->hero.shared_fate.ok() )
-          td( target )->debuffs_shared_fate->trigger();
+          p()->proc_actions.shared_fate->execute_on_target( target );
 
-        if ( p()->hero.quietus.ok() && p()->hero.feast_of_souls.ok() && rng().roll( p()->rng_settings.feast_of_souls.setting_value ) )
+        if ( p()->hero.quietus.ok() && p()->hero.feast_of_souls.ok() && rng().roll( p()->rng_settings.feast_of_souls_demo.setting_value ) )
           p()->feast_of_souls_gain();
       }
 
@@ -3396,8 +3567,7 @@ using namespace helpers;
       timespan_t extension_time = p()->talents.demonic_power_buff->effectN( 3 ).time_value();
 
       int wild_imp_counter = 0;
-      int demon_counter = 0;
-      int imp_cap = as<int>( p()->talents.summon_demonic_tyrant->effectN( 3 ).base_value() + p()->talents.reign_of_tyranny->effectN( 1 ).base_value() );
+      int imp_cap = as<int>( p()->talents.summon_demonic_tyrant->effectN( 3 ).base_value() );
 
       for ( auto& pet : p()->pet_list )
       {
@@ -3421,7 +3591,6 @@ using namespace helpers;
 
           lock_pet->buffs.demonic_power->trigger();
           wild_imp_counter++;
-          demon_counter++;
         }
         else if ( pet_type == PET_DREADSTALKER || pet_type == PET_VILEFIEND || pet_type == PET_SERVICE_FELGUARD || pet_type == PET_FELGUARD )
         {
@@ -3429,7 +3598,6 @@ using namespace helpers;
             lock_pet->expiration->reschedule_time = lock_pet->expiration->time + extension_time;
 
           lock_pet->buffs.demonic_power->trigger();
-          demon_counter++;
         }
       }
 
@@ -3447,15 +3615,6 @@ using namespace helpers;
       if ( p()->buffs.vilefiend->check() )
         p()->buffs.vilefiend->extend_duration( p(), extension_time );
 
-      if ( p()->talents.reign_of_tyranny.ok() )
-      {
-        for ( auto t : tyrants )
-        {
-          if ( t->is_active() )
-            t->buffs.reign_of_tyranny->trigger( demon_counter );
-        }
-      }
-
       if ( p()->hero.cruelty_of_kerxan.ok() )
       {
         timespan_t reduction = -p()->hero.cruelty_of_kerxan->effectN( 1 ).time_value();
@@ -3467,9 +3626,17 @@ using namespace helpers;
 
       if ( soul_harvester() && p()->hero.shadow_of_death.ok() )
       {
-        p()->resource_gain( RESOURCE_SOUL_SHARD, p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0, p()->gains.shadow_of_death );
+        // TOCHECK: 2025-08-27 The shards gained by Shadow of Death can also proc another Succulent Soul each (bug?)
+        if ( p()->bugs )
+          p()->resource_gain( RESOURCE_SOUL_SHARD, p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0, p()->gains.shadow_of_death );
+        else
+          p()->player_t::resource_gain( RESOURCE_SOUL_SHARD, p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0, p()->gains.shadow_of_death );
+
         p()->buffs.succulent_soul->trigger( as<int>( p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0 ) );
-        if( p()->sets->has_set_bonus( HERO_SOUL_HARVESTER, TWW3, B2 ) && p()->tier.rampaging_demonic_soul->ok() )
+        for ( int i = 0; i < as<int>( p()->hero.shadow_of_death_energize->effectN( 1 ).base_value() / 10.0 ); i++)
+          p()->procs.succulent_soul->occur();
+
+        if ( p()->sets->has_set_bonus( HERO_SOUL_HARVESTER, TWW3, B2 ) && p()->tier.rampaging_demonic_soul->ok() )
         {
           p()->warlock_pet_list.demonic_souls.spawn( p()->tier.rampaging_demonic_soul->duration() );
         }
@@ -3510,7 +3677,7 @@ using namespace helpers;
     {
       warlock_spell_t::execute();
       
-      p()->buffs.vilefiend->trigger();
+      p()->buffs.vilefiend->trigger( -1, 1.0 ); // Set value to 1.0 to allow Houndmasters Gambit talent to apply
       p()->warlock_pet_list.vilefiends.spawn( p()->talents.summon_vilefiend->duration() );
     }
   };
@@ -3573,7 +3740,7 @@ using namespace helpers;
       if ( p()->talents.impending_doom.ok() )
         p()->warlock_pet_list.wild_imps.spawn( as<int>( p()->talents.impending_doom->effectN( 2 ).base_value() ) );
 
-      if ( p()->talents.doom_eternal.ok() && p()->min_version_check( VERSION_11_1_0 ) )
+      if ( p()->talents.doom_eternal.ok() )
       {
         bool success = p()->buffs.demonic_core->trigger( 1, buff_t::DEFAULT_VALUE(), p()->talents.doom_eternal->effectN( 1 ).percent() );
 
@@ -3692,6 +3859,18 @@ using namespace helpers;
       base_dd_multiplier *= 1.0 + p->talents.sargerei_technique->effectN( 2 ).percent();
     }
 
+    void init() override
+    {
+      spell_t::init();
+
+      if ( affected_by.havoc )
+      {
+        // NOTE: The FnB talent adds its bonus damage to Incinerate Havoc (regardless of havoc target range)
+        base_aoe_multiplier *= p()->talents.havoc_debuff->effectN( 1 ).percent() + ( !p()->bugs ? p()->hero.gloom_of_nathreza->effectN( 2 ).percent() : 0.0 ) + p()->talents.fire_and_brimstone->effectN( 1 ).percent();
+        p()->havoc_spells.push_back( this );
+      }
+    }
+
     bool ready() override
     {
       if ( diabolist() && p()->executing != this && p()->buffs.infernal_bolt->check() )
@@ -3730,8 +3909,14 @@ using namespace helpers;
     {
       warlock_spell_t::impact( s );
 
+      // TOCHECK: 2025-08-27 Incinerate Havoc crit impacts don't give extra shards (bug?), and only 1 extra shard with Diabolic Embers
       if ( s->result == RESULT_CRIT )
-        p()->resource_gain( RESOURCE_SOUL_SHARD, 0.1 * energize_mult, p()->gains.incinerate_crits );
+      {
+        if ( !p()->bugs || s->chain_target == 0 )
+          p()->resource_gain( RESOURCE_SOUL_SHARD, 0.1 * energize_mult, p()->gains.incinerate_crits );
+        else if ( p()->talents.diabolic_embers.ok() )
+          p()->resource_gain( RESOURCE_SOUL_SHARD, 0.1, p()->gains.incinerate_crits );
+      }
     }
 
     double action_multiplier() const override
@@ -3874,16 +4059,52 @@ using namespace helpers;
 
   struct chaos_bolt_t : public warlock_spell_t
   {
+    struct chaos_bolt_state_t : public action_state_t
+    {
+      bool demonic_art_buffed;
+      bool rancora_empowered;
+
+      chaos_bolt_state_t( action_t* action, player_t* target )
+        : action_state_t( action, target ),
+        demonic_art_buffed( false ),
+        rancora_empowered( false )
+      { }
+
+      void initialize() override
+      {
+        action_state_t::initialize();
+        demonic_art_buffed = false;
+        rancora_empowered = false;
+      }
+
+      std::ostringstream& debug_str( std::ostringstream& s ) override
+      {
+        action_state_t::debug_str( s );
+        s << " demonic_art_buffed=" << demonic_art_buffed;
+        s << " rancora_empowered=" << rancora_empowered;
+        return s;
+      }
+
+      void copy_state( const action_state_t* s ) override
+      {
+        action_state_t::copy_state( s );
+        demonic_art_buffed = debug_cast<const chaos_bolt_state_t*>( s )->demonic_art_buffed;
+        rancora_empowered = debug_cast<const chaos_bolt_state_t*>( s )->rancora_empowered;
+      }
+    };
+
+    double havoc_rancora_mod_value;
     internal_combustion_t* internal_combustion;
 
     chaos_bolt_t( warlock_t* p, util::string_view options_str )
-      : warlock_spell_t( "Chaos Bolt", p, p->warlock_base.chaos_bolt, options_str )
+      : warlock_spell_t( "Chaos Bolt", p, p->warlock_base.chaos_bolt, options_str ),
+      havoc_rancora_mod_value( 0.8 )
     {
       affected_by.chaotic_energies = true;
       affected_by.havoc = true;
       affected_by.ashen_remains = p->talents.ashen_remains.ok();
       affected_by.chaos_incarnate = p->talents.chaos_incarnate.ok();
-      affected_by.touch_of_rancora = p->hero.touch_of_rancora.ok();
+      affected_by.touch_of_rancora = affected_by.touch_of_rancora_casted = p->hero.touch_of_rancora.ok();
 
       triggers.diabolic_ritual = triggers.demonic_art = p->hero.diabolic_ritual.ok();
       triggers.rancora_cb_bonus = true;
@@ -3891,12 +4112,17 @@ using namespace helpers;
 
       base_dd_multiplier *= 1.0 + p->talents.improved_chaos_bolt->effectN( 1 ).percent();
 
+      havoc_rancora_mod_value /= p->talents.havoc_debuff->effectN( 1 ).percent() + ( !p->bugs ? p->hero.gloom_of_nathreza->effectN( 2 ).percent() : 0.0 );
+
       if ( p->talents.internal_combustion.ok() )
       {
         internal_combustion = new internal_combustion_t( p );
         add_child( internal_combustion );
       }
     }
+
+    action_state_t* new_state() override
+    { return new chaos_bolt_state_t( this, target ); }
 
     timespan_t execute_time_flat_modifier() const override
     {
@@ -3960,12 +4186,49 @@ using namespace helpers;
         td( s->target )->debuffs_eradication->trigger();
     }
 
+    void schedule_execute( action_state_t* s ) override
+    {
+      // NOTE: Any of the Demonic Art buffs must be present when the cast begins for the spell to be empowered by Touch of Rancora
+      // and/or for the Demonic Art buff to be consumed upon executing the spell
+      if ( diabolist() && triggers.demonic_art )
+      {
+        action_state_t*& action_state = s ? s : pre_execute_state;
+        if ( !action_state )
+          action_state = get_state();
+
+        const bool demonic_art_buff_up = p()->buffs.art_overlord->check() || p()->buffs.art_mother->check() || p()->buffs.art_pit_lord->check();
+        debug_cast<chaos_bolt_state_t*>( action_state )->demonic_art_buffed = demonic_art_buff_up;
+        debug_cast<chaos_bolt_state_t*>( action_state )->rancora_empowered = affected_by.touch_of_rancora && demonic_art_buff_up;
+      }
+
+      warlock_spell_t::schedule_execute( s );
+    }
+
     void execute() override
     {
+      if ( pre_execute_state )
+      {
+        snapshot_state( pre_execute_state, amount_type( pre_execute_state ) );
+        // Casted spells do not consume any Demonic Art buff if none were active at the start of the cast
+        triggers.demonic_art_buff = debug_cast<chaos_bolt_state_t*>( pre_execute_state )->demonic_art_buffed;
+      }
+      else
+      {
+        triggers.demonic_art_buff = false;
+      }
+
       if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B2 ) )
         p()->buffs.demonic_oculus->trigger();
 
+      // NOTE: 2025-08-27 Rancora Empowered Havoc spells deals 80% of the original damage (bug?)
+      const double prev_base_aoe_multiplier = base_aoe_multiplier;
+      const bool rancora_empowered = pre_execute_state && debug_cast<chaos_bolt_state_t*>( pre_execute_state )->rancora_empowered;
+      if ( p()->bugs && diabolist() && affected_by.touch_of_rancora && affected_by.havoc && rancora_empowered )
+        base_aoe_multiplier *= havoc_rancora_mod_value;
+
       warlock_spell_t::execute();
+
+      base_aoe_multiplier = prev_base_aoe_multiplier; // Restore original previous havoc aoe multiplier
 
       // 2022-10-15: Backdraft is not consumed for Ritual of Ruin empowered casts, but IS hasted by it
       if ( !p()->buffs.ritual_of_ruin->check() )
@@ -3983,6 +4246,17 @@ using namespace helpers;
 
       if ( p()->talents.burn_to_ashes.ok() )
         p()->buffs.burn_to_ashes->trigger( as<int>( p()->talents.burn_to_ashes->effectN( 3 ).base_value() ) );
+    }
+
+    double composite_persistent_multiplier( const action_state_t* s ) const override
+    {
+      double m = warlock_spell_t::composite_persistent_multiplier( s );
+
+      // An incoming rancora empowered casted spell will remain empowered even if the Demonic Art buff falls off during cast
+      if ( debug_cast<const chaos_bolt_state_t*>( s )->rancora_empowered )
+        m *= 1.0 + p()->hero.touch_of_rancora->effectN( 1 ).percent();
+
+      return m;
     }
 
     double composite_crit_chance() const override
@@ -4129,7 +4403,7 @@ using namespace helpers;
 
       affected_by.touch_of_rancora = p->hero.touch_of_rancora.ok();
 
-      triggers.diabolic_ritual = triggers.demonic_art = p->hero.diabolic_ritual.ok();
+      triggers.diabolic_ritual = triggers.demonic_art = triggers.demonic_art_buff = p->hero.diabolic_ritual.ok();
 
       base_costs[ RESOURCE_SOUL_SHARD ] += p->talents.inferno->effectN( 1 ).base_value() / 10.0;
 
@@ -4237,8 +4511,11 @@ using namespace helpers;
 
   struct shadowburn_t : public warlock_spell_t
   {
+    double havoc_rancora_mod_value;
+
     shadowburn_t( warlock_t* p, util::string_view options_str )
-      : warlock_spell_t( "Shadowburn", p, p->talents.shadowburn, options_str )
+      : warlock_spell_t( "Shadowburn", p, p->talents.shadowburn, options_str ),
+      havoc_rancora_mod_value( 0.8 )
     {
       cooldown->hasted = true;
       
@@ -4248,10 +4525,12 @@ using namespace helpers;
       affected_by.chaos_incarnate = p->talents.chaos_incarnate.ok();
       affected_by.touch_of_rancora = p->hero.touch_of_rancora.ok();
 
-      triggers.diabolic_ritual = triggers.demonic_art = p->hero.diabolic_ritual.ok();
+      triggers.diabolic_ritual = triggers.demonic_art = triggers.demonic_art_buff = p->hero.diabolic_ritual.ok();
       triggers.jackpot_destruction = true;
 
       base_dd_multiplier *= 1.0 + p->talents.blistering_atrophy->effectN( 1 ).percent();
+
+      havoc_rancora_mod_value /= p->talents.havoc_debuff->effectN( 1 ).percent() + ( !p->bugs ? p->hero.gloom_of_nathreza->effectN( 2 ).percent() : 0.0 );
     }
 
     void impact( action_state_t* s ) override
@@ -4276,7 +4555,15 @@ using namespace helpers;
       if ( p()->sets->has_set_bonus( HERO_DIABOLIST, TWW3, B2 ) )
         p()->buffs.demonic_oculus->trigger();
 
+      // NOTE: 2025-08-27 Rancora Empowered Havoc spells deals 80% of the original damage (bug?)
+      const double prev_base_aoe_multiplier = base_aoe_multiplier;
+      const bool rancora_empowered = p()->buffs.art_overlord->check() || p()->buffs.art_mother->check() || p()->buffs.art_pit_lord->check();
+      if ( p()->bugs && diabolist() && affected_by.touch_of_rancora && affected_by.havoc && rancora_empowered )
+        base_aoe_multiplier *= havoc_rancora_mod_value;
+
       warlock_spell_t::execute();
+
+      base_aoe_multiplier = prev_base_aoe_multiplier; // Restore original previous havoc aoe multiplier
 
       p()->buffs.conflagration_of_chaos_sb->expire();
 
@@ -4617,6 +4904,8 @@ using namespace helpers;
   
   struct infernal_bolt_t : public warlock_spell_t
   {
+    const double havoc_mod_value = 1.0;
+
     infernal_bolt_t( warlock_t* p, util::string_view options_str )
       : warlock_spell_t( "Infernal Bolt", p, p->hero.infernal_bolt, options_str )
     {
@@ -4643,6 +4932,18 @@ using namespace helpers;
       {
        base_dd_multiplier *= 1.0 + p->talents.sargerei_technique->effectN( 2 ).percent();
        base_dd_multiplier *= 1.0 + p->talents.sargerei_technique->effectN( 1 ).percent(); //  Sargerei Technique Appears to Double dip for Infernal Bolt due to Demo modifier
+      }
+    }
+
+    void init() override
+    {
+      spell_t::init();
+
+      if ( destruction() && affected_by.havoc )
+      {
+        // NOTE: 2025-08-27 Infernal Bolt Havoc deals 100% of the original damage (bug?)
+        base_aoe_multiplier *= p()->bugs ? havoc_mod_value : ( p()->talents.havoc_debuff->effectN( 1 ).percent() + ( !p()->bugs ? p()->hero.gloom_of_nathreza->effectN( 2 ).percent() : 0.0 ) );
+        p()->havoc_spells.push_back( this );
       }
     }
 
@@ -4716,6 +5017,8 @@ using namespace helpers;
   {
     struct ruination_impact_t : public warlock_spell_t
     {
+      hand_of_guldan_t::hog_impact_t* hog_impact_spell;
+
       ruination_impact_t( warlock_t* p )
         : warlock_spell_t( "Ruination (Impact)", p, p->hero.ruination_impact )
       {
@@ -4725,6 +5028,11 @@ using namespace helpers;
 
         affected_by.chaotic_energies = true;
         affected_by.backdraft = true;
+
+        if ( demonology() )
+        {
+          hog_impact_spell = new hand_of_guldan_t::hog_impact_t( p );
+        }
       }
 
       void impact( action_state_t* s ) override
@@ -4735,11 +5043,13 @@ using namespace helpers;
         {
           if ( demonology() )
           {
-            for ( int i = 1; i <= as<int>( p()->hero.ruination_buff->effectN( 2 ).base_value() ); i++ )
-            {
-              auto ev = make_event<imp_delay_event_t>( *sim, p(), rng().gauss( 180.0 * i, 25.0 ), 180.0 * i );
-              p()->wild_imp_spawns.push_back( ev );
-            }
+            make_event( *sim, 0_ms, [ this, t = target ] {
+              hog_impact_spell->state.shards_used = as<int>( p()->hero.ruination_buff->effectN( 2 ).base_value() );
+              hog_impact_spell->state.rancora_empowered = false;      // Ruination HoG impact is never rancora empowered
+              hog_impact_spell->state.allow_umbral_blaze = false;     // Ruination HoG impact can't proc umbral blaze
+              hog_impact_spell->state.allow_succulent_soul = false;   // Ruination HoG impact can't benefit from succulent soul
+              hog_impact_spell->execute_on_target( t );
+            } );
           }
 
           if ( destruction() )
@@ -4791,8 +5101,9 @@ using namespace helpers;
       // In its own effect on mastery, so just manually applying it here rather than adding the affected_by to warlock_spell_t
       if ( p()->warlock_base.master_demonologist->ok() )
         m *= 1.0 + p()->cache.mastery_value();
-      if ( p()->specialization() == WARLOCK_DEMONOLOGY )
-        m *= 1.0 + p()->sets->set( HERO_DIABOLIST, TWW3, B2 )->effectN( 2 ).percent();
+      /* Effect removed, likely a bug
+      if (p()->specialization() == WARLOCK_DEMONOLOGY)
+        m *= 1.0 + p()->sets->set( HERO_DIABOLIST, TWW3, B2 )->effectN( 2 ).percent();*/
     
       m *= p()->buffs.demonic_oculus->check();
     
@@ -4975,18 +5286,24 @@ using namespace helpers;
         p->procs.bleakheart_tactics->occur();
       }
 
-      bool collapse = false; // 2024-09-06 Malevolence no longer initiates collapse automatically
-      collapse = collapse || ( p->hero.seeds_of_their_demise.ok() && target->health_percentage() <= p->hero.seeds_of_their_demise->effectN( 2 ).base_value() ) ;
-      collapse = collapse || ( p->hero.seeds_of_their_demise.ok() && tdata->dots_wither->current_stack() >= as<int>( p->hero.seeds_of_their_demise->effectN( 1 ).base_value() ) );
+      if ( !tdata->debuffs_blackened_soul->check() )
+      {
+        bool collapse = false; // 2024-09-06 Malevolence no longer initiates collapse automatically
+        collapse = collapse || ( p->hero.seeds_of_their_demise.ok() && tdata->dots_wither->current_stack() > 1 && target->health_percentage() <= p->hero.seeds_of_their_demise->effectN( 2 ).base_value() ) ;
+        collapse = collapse || ( p->hero.seeds_of_their_demise.ok() && tdata->dots_wither->current_stack() >= as<int>( p->hero.seeds_of_their_demise->effectN( 1 ).base_value() ) );
 
-      if ( collapse )
-      {
-        tdata->debuffs_blackened_soul->trigger();
-      }
-      else if ( p->rng().roll( p->rng_settings.blackened_soul.setting_value ) )
-      {
-        tdata->debuffs_blackened_soul->trigger();
-        p->procs.blackened_soul->occur();
+        if ( collapse )
+        {
+          tdata->debuffs_blackened_soul->trigger();
+          p->sim->print_debug( "{} wither stack collapse in {} started (seeds of their demise) (stack gain check). wither_current_stack={}, wither_target_health_percentage={:.2f}%",
+                      p->name(), target->name(), tdata->dots_wither->current_stack(), target->health_percentage() );
+        }
+        else if ( p->rng().roll( p->rng_settings.blackened_soul.setting_value ) )
+        {
+          tdata->debuffs_blackened_soul->trigger();
+          p->procs.blackened_soul->occur();
+          p->sim->print_debug( "{} wither stack collapse in {} started (blackened soul proc)", p->name(), target->name() );
+        }
       }
 
       if ( malevolence )
@@ -5017,9 +5334,6 @@ using namespace helpers;
         return;
     }
   }
-
-  void helpers::set_shared_fate_tick_factor( warlock_t* p, double f )
-  { debug_cast<shared_fate_t*>( p->proc_actions.shared_fate )->tick_factor = f; }
 
   // Event for spawning Wild Imps for Demonology
   imp_delay_event_t::imp_delay_event_t( warlock_t* p, double delay, double exp ) : player_event_t( *p, timespan_t::from_millis( delay ) )

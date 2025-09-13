@@ -739,6 +739,7 @@ public:
     spell_data_ptr_t kill_command_bm_pet;
 
     spell_data_ptr_t cobra_shot;
+    spell_data_ptr_t cobra_shot_data;
     spell_data_ptr_t animal_companion;
     spell_data_ptr_t solitary_companion;
     spell_data_ptr_t barbed_shot;
@@ -1329,7 +1330,6 @@ public:
     ab::apply_affecting_aura( p->tier_set.tww_s3_dark_ranger_2pc );
     ab::apply_affecting_aura( p->tier_set.tww_s3_dark_ranger_4pc );
     ab::apply_affecting_aura( p->tier_set.tww_s3_sentinel_2pc );
-    ab::apply_affecting_aura( p->tier_set.tww_s3_sentinel_4pc );
     ab::apply_affecting_aura( p->tier_set.tww_s3_pack_leader_2pc );
 
     // Hero Tree passives
@@ -2469,7 +2469,7 @@ struct hunter_main_pet_t final : public hunter_main_pet_base_t
     const auto remains = std::max( time_to_cd, time_to_fc );
     const auto delay_mean = o() -> options.pet_basic_attack_delay;
     const auto delay_stddev = 100_ms;
-    const auto lag = o()->bugs ? rng().gauss( delay_mean, delay_stddev ) : 0_ms;
+    const auto lag = rng().gauss( delay_mean, delay_stddev );
     return std::max( remains + lag, 100_ms );
   }
 
@@ -2768,7 +2768,7 @@ struct kill_command_bm_t: public hunter_pet_attack_t<hunter_main_pet_base_t>
 
     if ( o()->talents.phantom_pain.ok() )
     {
-      phantom_pain.replicate_amount = o()->talents.phantom_pain->effectN( 1 ).percent();
+      phantom_pain.replicate_amount = o()->talents.phantom_pain->effectN( 1 ).percent() + o()->specs.beast_mastery_hunter->effectN( 13 ).percent();
       phantom_pain.max_targets = as<int>( o()->talents.phantom_pain->effectN( 3 ).base_value() );
     }
   }
@@ -3722,7 +3722,6 @@ void hunter_t::trigger_spotters_mark( player_t* target, bool force )
 
 double hunter_t::calculate_tip_of_the_spear_value( double tip_bonus ) const
 {
-  tip_bonus += talents.better_together->effectN( 3 ).percent();
 
   if ( talents.flankers_advantage.ok() )
   {
@@ -3730,6 +3729,9 @@ double hunter_t::calculate_tip_of_the_spear_value( double tip_bonus ) const
     double ratio = std::min( cache.attack_crit_chance(), talents.flankers_advantage->effectN( 5 ).percent() ) / talents.flankers_advantage->effectN( 5 ).percent();
     tip_bonus += tip_bonus * ratio;
   }
+
+  //Better Together is seemingly unaffected by Flanker's Advantage bonus
+  tip_bonus += talents.better_together->effectN( 3 ).percent();
 
   if ( buffs.relentless_primal_ferocity->check() )
     tip_bonus *= 1 + talents.relentless_primal_ferocity_buff->effectN( 2 ).percent();
@@ -3743,11 +3745,24 @@ void hunter_t::trigger_deathblow( bool activated )
     return;
 
   procs.deathblow->occur();
+  // Kill Shot/Black Arrow is set up by default to require reacting to Deathblow,
+  // and Deathblow by default is set to be reactable and non activated to force reactions and aura delay,
+  // so that needs to be temporarily flipped here for the one case it's considered immediately available after pressing Trueshot.
   if ( activated )
   {
-    buffs.deathblow->increment();
-    if ( talents.razor_fragments.ok() )
-      buffs.razor_fragments->increment();
+    buffs.deathblow->reactable = false;
+    buffs.deathblow->activated = true;
+    buffs.deathblow->trigger();
+    buffs.deathblow->reactable = true;
+    buffs.deathblow->activated = false;
+
+    // This should just need to avoid the aura delay.
+    if (talents.razor_fragments.ok())
+    {
+      buffs.razor_fragments->activated = true;
+      buffs.razor_fragments->trigger();
+      buffs.razor_fragments->activated = false;
+    }
   }
   else
   {
@@ -3756,7 +3771,7 @@ void hunter_t::trigger_deathblow( bool activated )
       buffs.razor_fragments->trigger();
   }
   
-  talents.black_arrow.ok() ? cooldowns.black_arrow->reset( true ) : cooldowns.kill_shot->reset( true );
+  talents.black_arrow.ok() ? cooldowns.black_arrow->reset( !activated ) : cooldowns.kill_shot->reset( !activated );
 }
 
 void hunter_t::trigger_sentinel( player_t* target, bool force, proc_t* proc )
@@ -4254,12 +4269,7 @@ struct arcane_shot_t : public arcane_shot_base_t
     timespan_t g = arcane_shot_base_t::gcd();
 
     if ( p()->buffs.precise_shots->check() )
-    {
-      // TODO 30/7/25: Not giving the gcd reduction if the buff was just applied, so a queued cast immediately following
-      // an Aimed Shot will consume the buff but incur a full gcd.
-      if ( !p()->bugs || p()->buffs.precise_shots->elapsed( sim->current_time() ) > sim->queue_lag.mean )
-        g *= 1 + p()->talents.precise_shots_buff->effectN( 6 ).percent();
-    }
+      g *= 1 + p()->talents.precise_shots_buff->effectN( 6 ).percent();
     
     return std::max( min_gcd, g );
   }
@@ -4415,7 +4425,8 @@ struct explosive_shot_base_t : public hunter_ranged_attack_t
   {
     dot_t* dot = td( s->target )->dots.explosive_shot;
 
-    if ( dot->is_ticking() )
+    bool refresh = dot->is_ticking();
+    if ( refresh )
     {
       if ( !explosion->pre_execute_state )
         explosion->pre_execute_state = explosion->get_state();
@@ -4425,24 +4436,17 @@ struct explosive_shot_base_t : public hunter_ranged_attack_t
       // - an existing dot applied by a normal cast being detonated by a cast with an effectiveness bonus
       // There is no way to test if a competing effectiveness bonus would be combined, overwritten, or would carry on to the last_tick(),
       // so just use the effectiveness bonus if it exists then clear the bonus from the dot state.
-      // For Precision Detonation, a detonation from an Aimed Shot cast alongside an Explosive Shot with bonus effectiveness that itself 
-      // detonates an existing dot before the Aimed Shot impact will result in both detonations having a bonus.
-      // For that case, delay updating the dot state and clearing the effectiveness bonus until after the Aimed Shot would hit.
       if ( s->action->snapshot_flags & STATE_MUL_PERSISTENT )
         dot->state->persistent_multiplier = s->persistent_multiplier;
 
       explosion->pre_execute_state->copy_state( dot->state );
       explosion->execute_on_target( s->target );
-
-      // Based on their travel times, about 200ms should always give Aimed Shot a chance to hit if cast alongside the Explosive Shot.
-      make_event( sim, 200_ms, [ this, dot ]()
-        {
-          if ( dot->is_ticking() )
-            update_state( dot->state, dot->state->result_type );
-        } );
     }
 
     hunter_ranged_attack_t::impact( s );
+
+    if ( refresh )
+      update_state( dot->state, dot->state->result_type );
   }
 
   void tick( dot_t* ) override
@@ -4474,6 +4478,9 @@ struct explosive_shot_base_t : public hunter_ranged_attack_t
       p()->buffs.lock_and_load->trigger();
       p()->cooldowns.aimed_shot->reset( false );
     }
+
+    if ( p()->talents.precision_detonation->ok() )
+      p()->buffs.streamline->trigger();
   }
 
   double cost_pct_multiplier() const override
@@ -4587,11 +4594,11 @@ struct kill_shot_base_t : hunter_ranged_attack_t
   {
     hunter_ranged_attack_t::execute();
 
+    if ( p()->buffs.deathblow->up() && rng().roll( blighted_quiver_chance ) )
+      p()->buffs.blighted_quiver->trigger();
+
     p()->buffs.deathblow->expire();
     p()->buffs.razor_fragments->expire();
-    
-    if ( rng().roll( blighted_quiver_chance ) )
-      p()->buffs.blighted_quiver->trigger();
 
     if ( p()->talents.headshot.ok() )
       p()->consume_precise_shots();
@@ -4665,12 +4672,7 @@ struct kill_shot_base_t : hunter_ranged_attack_t
     timespan_t g = hunter_ranged_attack_t::gcd();
 
     if ( p()->buffs.precise_shots->check() )
-    {
-      // TODO 30/7/25: Not giving the gcd reduction if the buff was just applied, so a queued cast immediately following
-      // an Aimed Shot will consume the buff but incur a full gcd.
-      if ( !p()->bugs || p()->buffs.precise_shots->elapsed( sim->current_time() ) > sim->queue_lag.mean )
-        g *= 1 + p()->talents.precise_shots_buff->effectN( 6 ).percent();
-    }
+      g *= 1 + p()->talents.precise_shots_buff->effectN( 6 ).percent();
 
     return std::max( min_gcd, g );
   }
@@ -4685,6 +4687,27 @@ struct kill_shot_base_t : hunter_ranged_attack_t
     hunter_ranged_attack_t::snapshot_state( s, type );
     debug_cast<state_t*>( s )->razor_fragments_up = p()->buffs.razor_fragments->check();
     debug_cast<state_t*>( s )->empowered_by_precise_shots = p()->talents.headshot.ok() && p()->buffs.precise_shots->up();
+  }
+
+  bool ready() override
+  {
+    // Force the cooldown reset reaction because apparently that was just implemented for apl checks :/
+    return hunter_ranged_attack_t::ready() && cooldown->reset_react <= sim->current_time();
+  }
+
+  std::unique_ptr<expr_t> create_expression( util::string_view expression_str ) override
+  {
+    if ( expression_str == "ready" )
+    {
+      return make_fn_expr( expression_str, [ this ] {
+        // Must meet both ready() and target_ready() conditions to be considered ready:
+        // ready(): Must either be off cooldown normally (does not need to be reacted to) or reset by a Deathblow (must be reacted to).
+        // target_ready(): Must either be within the proper health thresholds or have had an active Deathblow longer than the reaction period.
+        return ready() && target_ready( target );
+      } );
+    }
+
+    return hunter_ranged_attack_t::create_expression( expression_str );
   }
 };
 
@@ -4889,13 +4912,9 @@ struct black_arrow_t final : public kill_shot_base_t
 
     if ( p()->buffs.withering_fire->up() )
     {
-      auto tl = target_list();
-
       // Prefer targets without Black Arrow ticking.
-      auto start = tl.begin();
-      std::partition( *start == target ? std::next( start ) : start, tl.end(), [ this ]( player_t* t ) {
-        return !td( t )->dots.black_arrow->is_ticking();
-      } );
+      auto tl = target_list();
+      range::erase_remove( tl, [ this ]( player_t* t ) { return t != target && td( t )->dots.black_arrow->is_ticking(); } );
       target_cache.is_valid = false;
 
       int count = withering_fire.count + p()->state.blighted_quiver_count;
@@ -5046,6 +5065,15 @@ struct sentinel_t : hunter_ranged_attack_t
   sentinel_t( hunter_t* p ) : hunter_ranged_attack_t( "sentinel", p, p->talents.sentinel_tick )
   {
     background = dual = true;
+
+    if ( p->tier_set.tww_s3_sentinel_4pc.ok() )
+    {
+      double mod = p->tier_set.tww_s3_sentinel_4pc->effectN( 2 ).percent();
+      if ( p->specialization() == HUNTER_MARKSMANSHIP )
+        mod += p->specs.marksmanship_hunter->effectN( 15 ).percent();
+
+      base_dd_multiplier *= 1 + mod;
+    }
 
     if ( p->talents.invigorating_pulse.ok() )
     {
@@ -5210,15 +5238,14 @@ struct multishot_bm_t: public hunter_ranged_attack_t
 
 // Cobra Shot =================================================================
 
-struct cobra_shot_t: public hunter_ranged_attack_t
+struct cobra_shot_base_t: public hunter_ranged_attack_t
 {
   const timespan_t kill_command_reduction;
 
-  cobra_shot_t( hunter_t* p, util::string_view options_str ):
-    hunter_ranged_attack_t( "cobra_shot", p, p -> talents.cobra_shot ),
+  cobra_shot_base_t( hunter_t* p, util::string_view n, const spell_data_t* s ): 
+    hunter_ranged_attack_t( n, p, s ),
     kill_command_reduction( -timespan_t::from_seconds( data().effectN( 3 ).base_value() ) )
   {
-    parse_options( options_str );
   }
 
   int n_targets() const override
@@ -5270,12 +5297,19 @@ struct cobra_shot_t: public hunter_ranged_attack_t
   }
 };
 
+struct cobra_shot_t : public cobra_shot_base_t
+{
+  cobra_shot_t( hunter_t* p, util::string_view options_str ) : cobra_shot_base_t( p, "cobra_shot", p->talents.cobra_shot )
+  {
+    parse_options( options_str );
+  }
+};
+
 // Cobra Shot (Snakeskin Quiver)
 
-struct cobra_shot_snakeskin_quiver_t: public cobra_shot_t
+struct cobra_shot_snakeskin_quiver_t : public cobra_shot_base_t
 {
-  cobra_shot_snakeskin_quiver_t( hunter_t* p ):
-    cobra_shot_t( p, "" )
+  cobra_shot_snakeskin_quiver_t( hunter_t* p ): cobra_shot_base_t( p, "cobra_shot_snakeskin_quiver", p->talents.cobra_shot_data )
   {
     background = dual = true;
     base_costs[ RESOURCE_FOCUS ] = 0;
@@ -5451,8 +5485,10 @@ struct multishot_mm_t: public hunter_ranged_attack_t
 
     p()->consume_precise_shots();
 
+    // Delay this since secondary Aimed Shots can cleave with a Trick Shots from Volley, but will not be affected by a Trick Shots 
+    // from a queued Multi-Shot that might be executed before they are since they are delayed 10 ms.
     if ( ( p() -> talents.trick_shots.ok() && num_targets_hit >= p() -> talents.trick_shots -> effectN( 2 ).base_value() ) )
-      p() -> buffs.trick_shots -> trigger();
+      make_event( p()->sim, 10_ms, [ this ]() { p()->buffs.trick_shots->trigger(); } );
 
     p()->trigger_symphonic_arsenal();
   }
@@ -5504,12 +5540,7 @@ struct multishot_mm_t: public hunter_ranged_attack_t
     timespan_t g = hunter_ranged_attack_t::gcd();
 
     if ( p()->buffs.precise_shots->check() )
-    {
-      // TODO 30/7/25: Not giving the gcd reduction if the buff was just applied, so a queued cast immediately following
-      // an Aimed Shot will consume the buff but incur a full gcd.
-      if ( !p()->bugs || p()->buffs.precise_shots->elapsed( sim->current_time() ) > sim->queue_lag.mean )
-        g *= 1 + p()->talents.precise_shots_buff->effectN( 6 ).percent();
-    }
+      g *= 1 + p()->talents.precise_shots_buff->effectN( 6 ).percent();
 
     return std::max( min_gcd, g );
   }
@@ -5718,6 +5749,18 @@ struct aimed_shot_t : public aimed_shot_base_t
       base_costs[ RESOURCE_FOCUS ] = 0;
       base_multiplier *= p->talents.aspect_of_the_hydra->effectN( 1 ).percent() + p->talents.light_ammo->effectN( 3 ).percent();
     }
+
+    void execute() override
+    {
+      aimed_shot_base_t::execute();
+
+      // Consumes Lock and Load without a benefit
+      if ( p()->buffs.lock_and_load->check() )
+      {
+        p()->buffs.lock_and_load->decrement();
+        p()->cooldowns.explosive_shot->adjust( -p()->talents.magnetic_gunpowder->effectN( 2 ).time_value() );
+      }
+    }
   };
 
   struct aimed_shot_double_tap_t : aimed_shot_base_t
@@ -5727,6 +5770,18 @@ struct aimed_shot_t : public aimed_shot_base_t
       background = dual = true;
       base_costs[ RESOURCE_FOCUS ] = 0;
       base_multiplier *= p->talents.double_tap->effectN( 3 ).percent();
+    }
+
+    void execute() override
+    {
+      aimed_shot_base_t::execute();
+
+      // Consumes Lock and Load without a benefit
+      if ( p()->buffs.lock_and_load->check() )
+      {
+        p()->buffs.lock_and_load->decrement();
+        p()->cooldowns.explosive_shot->adjust( -p()->talents.magnetic_gunpowder->effectN( 2 ).time_value() );
+      }
     }
   };
 
@@ -5864,15 +5919,16 @@ struct aimed_shot_t : public aimed_shot_base_t
       p()->trigger_deathblow();
 
     auto tl = target_list();
+
+    // Delay these secondary shots since they can consume Moving Target or Lock and Load if either trigger off a queued cast.
     if ( aspect_of_the_hydra && tl.size() > 1 )
-      aspect_of_the_hydra->execute_on_target( tl[ 1 ] );
+      make_event( p()->sim, 10_ms, [ this, tl ]() { aspect_of_the_hydra->execute_on_target( tl[ 1 ] ); } );
 
     if ( double_tap && p()->buffs.double_tap->up() )
     {
-      double_tap->execute_on_target( target );
-      
+      make_event( p()->sim, 10_ms, [ this ]() { double_tap->execute_on_target( target ); } );
       if ( aspect_of_the_hydra && tl.size() > 1 )
-        aspect_of_the_hydra->execute_on_target( tl[ 1 ] );
+        make_event( p()->sim, 10_ms, [ this, tl ]() { aspect_of_the_hydra->execute_on_target( tl[ 1 ] ); } );
 
       p()->buffs.double_tap->expire();
     }
@@ -6037,8 +6093,13 @@ struct rapid_fire_t: public hunter_ranged_attack_t
     hunter_ranged_attack_t::last_tick( d );
 
     p()->consume_trick_shots();
-    p()->buffs.in_the_rhythm->trigger();
     p()->buffs.double_tap->expire();
+
+    //If a Rapid Fire is cancelled it does not trigger In The Rhythm
+    if ( d->ticks_left() == 0 )
+    {
+      p()->buffs.in_the_rhythm->trigger();
+    }
   }
 
   timespan_t composite_dot_duration( const action_state_t* s ) const override
@@ -6756,7 +6817,8 @@ struct summon_pet_t: public hunter_spell_t
 
     if ( !pet && ( p() -> specialization() != HUNTER_MARKSMANSHIP || p()->talents.unbreakable_bond.ok() ) )
     {
-      throw std::invalid_argument(fmt::format("Unable to find pet '{}' for summons.", p() -> options.summon_pet_str));
+      throw sc_invalid_apl_argument(
+        fmt::format( "Unable to find pet '{}' for summons.", p()->options.summon_pet_str ) );
     }
 
     hunter_spell_t::init_finished();
@@ -7057,7 +7119,7 @@ struct kill_command_t: public hunter_spell_t
       }
     }
 
-    if ( rng().roll( dire_command.chance ) )
+    if ( p()->actions.dire_beast && rng().roll( dire_command.chance ) )
     {
       p() -> actions.dire_beast -> execute();
       p() -> procs.dire_command -> occur();
@@ -8006,6 +8068,7 @@ action_t* hunter_t::create_action( util::string_view name, util::string_view opt
   if ( name == "auto_shot"             ) return new   actions::auto_attack_t( this, options_str );
   if ( name == "barbed_shot"           ) return new            barbed_shot_t( this, options_str );
   if ( name == "bestial_wrath"         ) return new          bestial_wrath_t( this, options_str );
+  if ( name == "black_arrow"           ) return new            black_arrow_t( this, options_str );
   if ( name == "bloodshed"             ) return new              bloodshed_t( this, options_str );
   if ( name == "bursting_shot"         ) return new          bursting_shot_t( this, options_str );
   if ( name == "butchery"              ) return new               butchery_t( this, options_str );
@@ -8042,12 +8105,12 @@ action_t* hunter_t::create_action( util::string_view name, util::string_view opt
       return new arcane_shot_t( this, options_str );
   }
 
-  if ( name == "kill_shot" || name == "black_arrow" )
+  if ( name == "kill_shot" )
   {
-    if ( talents.black_arrow.ok() )
-      return new black_arrow_t( this, options_str );
-    else 
+    if ( !talents.black_arrow.ok() || specialization() == HUNTER_MARKSMANSHIP )
       return new kill_shot_t( this, options_str );
+    else
+      return new black_arrow_t( this, options_str );
   }
 
   if ( name == "raptor_strike" || name == "mongoose_bite" || name == "raptor_bite" || name == "mongoose_strike" )
@@ -8100,7 +8163,7 @@ pet_t* hunter_t::create_pet( util::string_view pet_name, util::string_view pet_t
 
   if ( !pet_type.empty() )
   {
-    throw std::invalid_argument(fmt::format("Pet '{}' has unknown type '{}'.", pet_name, pet_type ));
+    throw sc_invalid_player_argument( fmt::format( "Pet '{}' has unknown type '{}'.", pet_name, pet_type ) );
   }
 
   return nullptr;
@@ -8259,6 +8322,7 @@ void hunter_t::init_spells()
     talents.kill_command_bm_pet               = talents.kill_command_bm_player.ok() ? find_spell( 83381 ) : spell_data_t::not_found();
 
     talents.cobra_shot                        = find_talent_spell( talent_tree::SPECIALIZATION, "Cobra Shot", HUNTER_BEAST_MASTERY );
+    talents.cobra_shot_data                   = find_spell( 193455 );
     talents.animal_companion                  = find_talent_spell( talent_tree::SPECIALIZATION, "Animal Companion", HUNTER_BEAST_MASTERY );
     talents.solitary_companion                = find_talent_spell( talent_tree::SPECIALIZATION, "Solitary Companion", HUNTER_BEAST_MASTERY );
     talents.barbed_shot                       = find_talent_spell( talent_tree::SPECIALIZATION, "Barbed Shot", HUNTER_BEAST_MASTERY );
@@ -8646,10 +8710,10 @@ void hunter_t::create_buffs()
 
   // Hunter Tree
 
-  buffs.deathblow =
-    make_buff( this, "deathblow", talents.deathblow_buff )
-      ->set_activated( false );
-  // Allows us to use may_react() in a ready check.
+  buffs.deathblow = make_buff( this, "deathblow", talents.deathblow_buff );
+  // By default, subject Deathblow to aura delay which allows queued casts to consume an existing Deathblow before a new Deathblow is applied.
+  buffs.deathblow->activated = false;
+  // By deafult, subject Deathblow to stack reaction, which allows may_react() in the ready().
   buffs.deathblow->reactable = true;
 
   // Marksmanship Tree
@@ -9054,12 +9118,13 @@ void hunter_t::create_buffs()
         } );
 
   if ( specialization() == HUNTER_BEAST_MASTERY )
-    buffs.withering_fire->set_tick_callback( [ this ]( buff_t*, int, timespan_t ) { trigger_deathblow(); } );
+    buffs.withering_fire->set_tick_callback( [ this ]( buff_t*, int, timespan_t ) { trigger_deathblow( true ); } );
 
   buffs.the_bell_tolls = 
     make_buff( this, "the_bell_tolls", talents.the_bell_tolls_buff )
       ->set_default_value_from_effect( 1 )
-      ->set_stack_behavior( buff_stack_behavior::ASYNCHRONOUS );
+      ->set_stack_behavior( buff_stack_behavior::ASYNCHRONOUS )
+      ->apply_affecting_aura( specs.beast_mastery_hunter );
 }
 
 void hunter_t::init_gains()
@@ -9218,10 +9283,17 @@ void hunter_t::init_action_list()
     const weapon_e type = main_hand_weapon.type;
     if ( type != WEAPON_BOW && type != WEAPON_CROSSBOW && type != WEAPON_GUN )
     {
-      sim -> error( "Player {} does not have a proper weapon type at the Main Hand slot: {}.",
-                    name(), util::weapon_subclass_string( items[ main_hand_weapon.slot ].parsed.data.item_subclass ) );
-      if ( specialization() != HUNTER_SURVIVAL )
-        sim -> cancel();
+      if ( specialization() == HUNTER_SURVIVAL )
+      {
+        sim->error( "{} does not have a proper weapon type at the Main Hand slot: {}.", *this,
+                    util::weapon_subclass_string( items[ main_hand_weapon.slot ].parsed.data.item_subclass ) );
+      }
+      else
+      {
+        throw sc_initialization_error(
+          fmt::format( "{} does not have a proper weapon type at the Main Hand slot: {}.", *this,
+                       util::weapon_subclass_string( items[ main_hand_weapon.slot ].parsed.data.item_subclass ) ) );
+      }
     }
   }
 
@@ -9310,6 +9382,11 @@ parsed_assisted_combat_rule_t hunter_t::parse_assisted_combat_rule( const assist
 
 std::vector<std::string> hunter_t::action_names_from_spell_id( unsigned int spell_id ) const
 {
+  if ( spell_id == 53351 && specialization() != HUNTER_SURVIVAL )
+  {
+    return { "kill_shot", "black_arrow" };
+  }
+
   return player_t::action_names_from_spell_id( spell_id );
 }
 
@@ -9885,11 +9962,6 @@ private:
   hunter_t& p;
 };
 
-namespace live_hunter
-{
-#include "class_modules/sc_hunter_live.inc"
-};
-
 // HUNTER MODULE INTERFACE ==================================================
 
 struct hunter_module_t: public module_t
@@ -9898,19 +9970,9 @@ struct hunter_module_t: public module_t
 
   player_t* create_player( sim_t* sim, util::string_view name, race_e r = RACE_NONE ) const override
   {
-    // TODO: migrate ptr to live with 11.2
-    if ( sim->dbc->ptr )
-    {
-      auto p = new hunter_t( sim, name, r );
-      p -> report_extension = std::unique_ptr<player_report_extension_t>( new hunter_report_t( *p ) );
-      return p;
-    }
-    else
-    {
-      auto p = new live_hunter::hunter_t( sim, name, r );
-      p -> report_extension = std::unique_ptr<player_report_extension_t>( new live_hunter::hunter_report_t( *p ) );
-      return p;
-    }
+    auto p = new hunter_t( sim, name, r );
+    p -> report_extension = std::unique_ptr<player_report_extension_t>( new hunter_report_t( *p ) );
+    return p;
   }
 
   bool valid() const override { return true; }

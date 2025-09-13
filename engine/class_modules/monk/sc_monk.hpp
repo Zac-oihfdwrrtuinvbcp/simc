@@ -43,7 +43,7 @@ struct monk_pet_t : public pet_t
 };
 struct storm_earth_and_fire_pet_t;
 struct xuen_pet_t;
-namespace  // niuzao
+namespace niuzao  // niuzao
 {
 struct niuzao_pet_t : public monk_pet_t
 {
@@ -53,7 +53,7 @@ struct niuzao_pet_t : public monk_pet_t
   action_t *create_action( std::string_view name, std::string_view options_str ) override;
   void init_spells() override;
 };
-}  // namespace
+}  // namespace niuzao
 struct call_to_arms_niuzao_pet_t;
 struct chiji_pet_t;
 struct yulon_pet_t;
@@ -227,8 +227,11 @@ struct conduit_of_the_celestials_container_t
 
 namespace buffs
 {
-struct monk_buff_t : public buff_t
+template <typename Base = buff_t>
+struct monk_buff_t : public Base
 {
+  using base_t = Base;
+
   monk_buff_t( monk_t *player, std::string_view name, const spell_data_t *spell_data = spell_data_t::nil(),
                const item_t *item = nullptr );
   monk_buff_t( monk_td_t *player, std::string_view name, const spell_data_t *spell_data = spell_data_t::nil(),
@@ -239,7 +242,7 @@ struct monk_buff_t : public buff_t
   const monk_t &p() const;
 };
 
-struct shuffle_t : monk_buff_t
+struct shuffle_t : monk_buff_t<>
 {
   timespan_t accumulator;
   const timespan_t max_duration;
@@ -249,7 +252,7 @@ struct shuffle_t : monk_buff_t
   void trigger( timespan_t duration );
 };
 
-struct gift_of_the_ox_t : monk_buff_t
+struct gift_of_the_ox_t : monk_buff_t<>
 {
   /*
    * TODO:
@@ -308,14 +311,14 @@ private:
 
   bool fallback;
 
-  struct accumulator_t : monk_buff_t
+  struct accumulator_t : monk_buff_t<>
   {
     aspect_of_harmony_t *aspect_of_harmony;
     accumulator_t( monk_t *player, aspect_of_harmony_t *aspect_of_harmony );
     void trigger_with_state( action_state_t *state );
   };
 
-  struct spender_t : monk_buff_t
+  struct spender_t : monk_buff_t<>
   {
     template <class base_action_t>
     struct purified_spirit_t : base_action_t
@@ -354,6 +357,16 @@ public:
   void trigger_path_of_resurgence();
 
   bool heal_ticking();
+};
+
+struct fractional_absorb_t : public monk_buff_t<absorb_buff_t>
+{
+  double absorb_fraction;
+
+  fractional_absorb_t( monk_t *player, std::string_view name, const spell_data_t *spell_data );
+
+  double consume( double amount, action_state_t *state = nullptr ) override;
+  absorb_buff_t *set_absorb_fraction( double fraction );
 };
 }  // namespace buffs
 
@@ -1371,6 +1384,12 @@ public:
       const spell_data_t *coc_4pc_jade_serpents_blessing_data;
       propagate_const<buff_t *> coc_4pc_jade_serpents_blessing;
       const spell_data_t *moh_2pc;
+      const spell_data_t *moh_2pc_harmonic_surge_buff_data;
+      const spell_data_t *moh_2pc_harmonic_surge_damage;
+      const spell_data_t *moh_2pc_harmonic_surge_heal;
+      propagate_const<buff_t *> moh_2pc_harmonic_surge_buff;
+      accumulated_rng_t *moh_2pc_rng;
+      std::map<unsigned, cooldown_t *> moh_2pc_icd;
       const spell_data_t *moh_4pc;
       const spell_data_t *spm_2pc;
       const spell_data_t *spm_2pc_flurry_charge_data;
@@ -1384,12 +1403,12 @@ public:
   {
     std::array<pets::storm_earth_and_fire_pet_t *, (int)pets::sef_pet_e::SEF_PET_MAX> sef;
     spawner::pet_spawner_t<pet_t, monk_t> xuen;
-    spawner::pet_spawner_t<pets::niuzao_pet_t, monk_t> niuzao;
+    spawner::pet_spawner_t<pets::niuzao::niuzao_pet_t, monk_t> niuzao;
     spawner::pet_spawner_t<pet_t, monk_t> yulon;
     spawner::pet_spawner_t<pet_t, monk_t> chiji;
     spawner::pet_spawner_t<pet_t, monk_t> white_tiger_statue;
     spawner::pet_spawner_t<pet_t, monk_t> fury_of_xuen_tiger;
-    spawner::pet_spawner_t<pets::niuzao_pet_t, monk_t> call_to_arms_niuzao;
+    spawner::pet_spawner_t<pets::niuzao::niuzao_pet_t, monk_t> call_to_arms_niuzao;
 
     pet_t *bron;
 

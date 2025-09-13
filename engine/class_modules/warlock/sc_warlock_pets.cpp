@@ -53,9 +53,6 @@ void warlock_pet_t::create_buffs()
   buffs.the_expendables = make_buff( this, "the_expendables", o()->talents.the_expendables_buff )
                               ->set_default_value_from_effect( 1 );
 
-  buffs.reign_of_tyranny = make_buff( this, "reign_of_tyranny", o()->talents.reign_of_tyranny_buff )
-                               ->set_default_value_from_effect( 1 );
-
   buffs.fiendish_wrath = make_buff( this, "fiendish_wrath", o()->talents.fiendish_wrath_buff )
                              ->set_default_value_from_effect( 1 );
 
@@ -1301,7 +1298,7 @@ struct dreadbite_t : public warlock_pet_melee_attack_t
     if ( p->o()->talents.dreadlash.ok() )
     {
       aoe = -1;
-      reduced_aoe_targets = 5; // TOCHECK: Is this removed in TWW?
+      reduced_aoe_targets = 5; // TOCHECK regularly: 2025-08-27 This still applies in TWW
       radius = 8.0;
 
       base_dd_multiplier *= 1.0 + p->o()->talents.dreadlash->effectN( 1 ).percent();
@@ -1448,7 +1445,8 @@ double dreadstalker_t::composite_player_multiplier( school_e school ) const
 {
   double m = warlock_pet_t::composite_player_multiplier( school );
 
-  if ( o()->talents.the_houndmasters_gambit.ok() && o()->buffs.vilefiend->check() )
+  // TOCHECK: 2025-08-27 The Houndmasters Gambit talent cannot be applied by the second Vilefiend (bug?)
+  if ( o()->talents.the_houndmasters_gambit.ok() && ( bugs ? o()->buffs.vilefiend->check_value() : o()->buffs.vilefiend->check() ) )
     m *= 1.0 + o()->talents.houndmasters_aura->effectN( 1 ).percent();
 
   return m;
@@ -1648,8 +1646,16 @@ void vilefiend_t::arise()
   }
 }
 
-action_t* vilefiend_t::create_action( util::string_view name, util::string_view options_str )
+void vilefiend_t::demise()
 {
+  if ( !current.sleeping )
+    o()->buffs.vilefiend->decrement( 1, 0.0 ); // Set value to 0.0 to prevent Houndmasters Gambit talent from being applied by the 2nd Vilefiend
+
+  warlock_simple_pet_t::demise();
+}
+
+action_t* vilefiend_t::create_action( util::string_view name, util::string_view options_str )
+  {
   if ( name == "bile_spit" )
     return new bile_spit_t( this );
   if ( name == "headbutt" )
@@ -1687,8 +1693,6 @@ action_t* demonic_tyrant_t::create_action( util::string_view name, util::string_
 double demonic_tyrant_t::composite_player_multiplier( school_e school ) const
 {
   double m = warlock_pet_t::composite_player_multiplier( school );
-
-  m *= 1.0 + buffs.reign_of_tyranny->check_stack_value();
 
   m *= 1.0 + o()->hero.abyssal_dominion->effectN( 1 ).percent();
 
@@ -1772,7 +1776,7 @@ void greater_dreadstalker_t::arise()
 {
   warlock_pet_t::arise();
 
-  vilefiend_present_on_summon = o()->buffs.vilefiend->check();
+  vilefiend_present_on_summon = bugs ? o()->buffs.vilefiend->check_value() : o()->buffs.vilefiend->check();
 
   dreadbite_executes = 1;
 
@@ -1795,9 +1799,10 @@ double greater_dreadstalker_t::composite_player_multiplier( school_e school ) co
 {
   double m = warlock_pet_t::composite_player_multiplier( school );
 
-  // 2025-03-28: Houndmasters Gambit talent is only applied to Greater Dreadstalkers if Vilefiend is present on summon
+  // 2025-08-27: Houndmasters Gambit talent is only applied to Greater Dreadstalkers if Vilefiend is present on summon
   // Unlike normal Dreadstalkers, summoning Vilefiend when Greater Dreadstalkers are present does not apply the Houndmasters Gambit talent (maybe a bug?)
-  if ( ( vilefiend_present_on_summon || !bugs ) && o()->talents.the_houndmasters_gambit.ok() && o()->buffs.vilefiend->check() )
+  // TOCHECK: 2025-08-27 The Houndmasters Gambit talent cannot be applied by the second Vilefiend (bug?)
+  if ( ( vilefiend_present_on_summon || !bugs ) && o()->talents.the_houndmasters_gambit.ok() && ( bugs ? o()->buffs.vilefiend->check_value() : o()->buffs.vilefiend->check() ) )
     m *= 1.0 + o()->talents.houndmasters_aura->effectN( 1 ).percent();
 
   m *= buffs.demonic_hunger->check_value();
@@ -2355,8 +2360,7 @@ namespace diabolist
       if ( p()->o()->specialization() == WARLOCK_DEMONOLOGY )
       {
         // Added in build: 11.2.0.62253: reduces Diab Demons Damage by 20% for Demonology
-        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
-          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
+        m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
         // Wicked Cleave is mistakenly whitelisted on Effect 1 for Demonology Aura, Double Dipping alongside effect 5.
         m *= 1.0 + p()->o()->warlock_base.demonology_warlock->effectN( 1 ).percent();
       }
@@ -2364,8 +2368,7 @@ namespace diabolist
       if ( p()->o()->specialization() == WARLOCK_DESTRUCTION )
       {
         // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
-        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
-          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
+        m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
         // Destruction Aura Double Dips due to Diabolist Demon spells being whitelisted on effect 1.
         m *= 1.0 + p()->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
         // Destruction Summoners Embrace also Double Dip due to the same fact.
@@ -2436,8 +2439,7 @@ namespace diabolist
       if ( p()->o()->specialization() == WARLOCK_DEMONOLOGY )
       {
         // Added in build: 11.2.0.62253: reduces Diab Demons Damage by 20% for Demonology
-        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
-          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
+        m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
         // Wicked Cleave is mistakenly whitelisted on Effect 1 for Demonology Aura, Double Dipping alongside effect 5.
         m *= 1.0 + p()->o()->warlock_base.demonology_warlock->effectN( 1 ).percent();
       }
@@ -2445,8 +2447,7 @@ namespace diabolist
       if ( p()->o()->specialization() == WARLOCK_DESTRUCTION )
       {
         // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
-        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
-          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
+        m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
         // Destruction Aura Double Dips due to Diabolist Demon spells being whitelisted on effect 1.
         m *= 1.0 + p()->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
         // Destruction Summoners Embrace also Double Dip due to the same fact.
@@ -2525,9 +2526,8 @@ namespace diabolist
       double m = spell_t::composite_target_multiplier( target );
 
       // TOCHECK: 2025-07-27 Despite what is listed in spell data, Shadowtouched increases the damage of Feelseeker spell from Pit Lord by 25% instead of 20% (bug?)
-      // TODO: After 11.2.0 goes live, remove the wow version check
       if ( p()->o()->talents.shadowtouched.ok() && dbc::has_common_school( spell_t::get_school(), SCHOOL_SHADOW ) && owner_td( target )->debuffs_wicked_maw->check() )
-        m *= 1.0 + ( ( p()->bugs && ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } ) ) ? shadowtouched_value : p()->o()->talents.shadowtouched->effectN( 1 ).percent() );
+        m *= 1.0 + ( ( p()->bugs ) ? shadowtouched_value : p()->o()->talents.shadowtouched->effectN( 1 ).percent() );
 
       return m;
     }
@@ -2539,8 +2539,7 @@ namespace diabolist
       if ( p()->o()->specialization() == WARLOCK_DEMONOLOGY )
       {
         // Added in build: 11.2.0.62253: reduces Diab Demons Damage by 20% for Demonology
-        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
-          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
+        m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 3 ).percent();
         // Wicked Cleave is mistakenly whitelisted on Effect 1 for Demonology Aura, Double Dipping alongside effect 5.
         m *= 1.0 + p()->o()->warlock_base.demonology_warlock->effectN( 1 ).percent();
       }
@@ -2548,8 +2547,7 @@ namespace diabolist
       if ( p()->o()->specialization() == WARLOCK_DESTRUCTION )
       {
         // Added in build 11.2.0.62253: Increases Diab Demons damage by 15% for Destruction, missing from Patch Notes.
-        if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
-          m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
+        m *= 1.0 + p()->o()->hero.diabolic_ritual->effectN( 4 ).percent();
         // Destruction Aura Double Dips due to Diabolist Demon spells being whitelisted on effect 1.
         m *= 1.0 + p()->o()->warlock_base.destruction_warlock->effectN( 1 ).percent();
         // Destruction Summoners Embrace also Double Dip due to the same fact.

@@ -83,7 +83,7 @@ const spell_data_t* spell_from_spell_text( const special_effect_t& e )
 
 template <typename T = stat_buff_t>
 void create_all_stat_buffs( const special_effect_t& effect, const spell_data_t* buff_data, double amount,
-                            std::function<void( stat_e, buff_t* )> add_fn )
+                            std::function<void( stat_e, buff_t* )> add_fn, bool add_to_list = true )
 {
   static_assert( std::is_base_of_v<stat_buff_t, T> );
   auto buff_name = util::tokenize_fn( buff_data->name_cstr() );
@@ -104,6 +104,9 @@ void create_all_stat_buffs( const special_effect_t& effect, const spell_data_t* 
       ->set_name_reporting( util::string_join( stat_strs ) );
 
     add_fn( stats.front(), buff );
+
+    if ( add_to_list && !range::contains( effect.buff_list, buff ) )
+      effect.buff_list.push_back( buff );
   }
 }
 
@@ -553,13 +556,17 @@ void authority_of_radiant_power( special_effect_t& effect )
   damage->base_dd_min += damage_val;
   damage->base_dd_max += damage_val;
 
+  auto stat_val = effect.driver()->effectN( 2 ).average( effect );
+  stat_val *= attuned_mul( effect.player, effect.driver() );
+
   auto buff = create_buff<stat_buff_t>( effect.player, effect.player->find_spell( 448730 ) )
-    ->add_stat_from_effect_type( A_MOD_STAT, effect.driver()->effectN( 2 ).average( effect ) );
+    ->add_stat_from_effect_type( A_MOD_STAT, stat_val );
 
   if ( found )
     return;
 
   damage->base_multiplier *= role_mult( effect.player, effect.player->find_spell( 445339 ) );
+  damage->base_multiplier *= attuned_mul( effect.player, effect.driver() );
 
   effect.spell_id = effect.trigger()->id();  // rppm driver is the effect trigger
 
@@ -584,6 +591,7 @@ void authority_of_the_depths( special_effect_t& effect )
     return;
 
   damage->base_multiplier *= role_mult( effect.player, effect.player->find_spell( 445341 ) );
+  damage->base_multiplier *= attuned_mul( effect.player, effect.driver() );
 
   effect.spell_id = effect.trigger()->id();  // rppm driver is the effect trigger
 
@@ -608,6 +616,7 @@ void authority_of_storms( special_effect_t& effect )
     return;
 
   damage->base_multiplier *= role_mult( effect.player, effect.player->find_spell( 445336 ) );
+  damage->base_multiplier *= attuned_mul( effect.player, effect.driver() );
 
   effect.spell_id = effect.trigger()->id();  // rppm driver is the effect trigger
 
@@ -623,8 +632,11 @@ void secondary_weapon_enchant( special_effect_t& effect )
 
   auto found = buff_t::find( effect.player, buff_name );
 
+  auto stat_val = effect.driver()->effectN( 1 ).average( effect );
+  stat_val *= attuned_mul( effect.player, effect.driver() );
+
   auto buff = create_buff<stat_buff_t>( effect.player, buff_name, buff_data )
-    ->add_stat_from_effect_type( A_MOD_RATING, effect.driver()->effectN( 1 ).average( effect ) );
+    ->add_stat_from_effect_type( A_MOD_RATING, stat_val );
 
   if ( found )
     return;
@@ -1565,7 +1577,7 @@ void aberrant_spellforge( special_effect_t& effect )
         if ( empowerment->check() )
         {
           damage->execute_on_target( s->target );
-          empowerment->expire( a );
+          empowerment->consume( a );
         }
       } );
 
@@ -1736,8 +1748,17 @@ void sikrans_endless_arsenal( special_effect_t& effect )
 
       stance.emplace_back( b_dam, b_stance );
 
+      e.player->register_precombat_begin( [ this ]( player_t* ) {
+        cycle_stance( false );
+      } );
+    }
+
+    void init_finished() override
+    {
+      generic_proc_t::init_finished();
+
       // adjust for thewarwithin.sikrans.shadow_arsenal_stance= option
-      const auto& option = e.player->thewarwithin_opts.sikrans_endless_arsenal_stance;
+      const auto& option = player->thewarwithin_opts.sikrans_endless_arsenal_stance;
       if ( !option.is_default() )
       {
         if ( util::str_compare_ci( option, "decimation" ) )
@@ -1745,12 +1766,9 @@ void sikrans_endless_arsenal( special_effect_t& effect )
         else if ( util::str_compare_ci( option, "barrage" ) )
           std::rotate( stance.begin(), stance.begin() + 2, stance.end() );
         else if ( !util::str_compare_ci( option, "flourish" ) )
-          throw std::invalid_argument( "Valid thewarwithin.sikrans.shadow_arsenal_stance: flourish, decimation, barrage" );
+          throw sc_invalid_apl_argument(
+            "Valid 'thewarwithin.sikrans.shadow_arsenal_stance' are: flourish, decimation, barrage" );
       }
-
-      e.player->register_precombat_begin( [ this ]( player_t* ) {
-        cycle_stance( false );
-      } );
     }
 
     void cycle_stance( bool action = true )
@@ -3687,7 +3705,7 @@ void signet_of_the_priory( special_effect_t& effect )
         [ this ]( stat_e s, buff_t* b ) { buffs[ s ] = b; } );
 
       create_all_stat_buffs( e, e.player->find_spell( 450882 ), data->effectN( 1 ).average( e ),
-        [ this ]( stat_e s, buff_t* b ) { party_buffs[ s ] = b; } );
+        [ this ]( stat_e s, buff_t* b ) { party_buffs[ s ] = b; }, false );
     }
 
     void execute() override
@@ -3755,6 +3773,13 @@ void harvesters_edict( special_effect_t& effect )
       else
         damage->execute();
     } );
+
+  // adjust rppm if harvester's interdiction (455819) is equipped
+  if ( find_special_effect( effect.player, 455819 ) )
+  {
+    effect.rppm_modifier_ =
+      effect.player->dbc->real_ppm_modifier( effect.driver()->id(), effect.player, effect.item->item_level(), 455819 );
+  }
 
   new dbc_proc_callback_t( effect.player, effect );
 }
@@ -4631,7 +4656,7 @@ void shadowbinding_ritual_knife( special_effect_t& effect )
   auto buff_spell = effect.driver()->effectN( 2 ).trigger();
 
   create_all_stat_buffs( effect, buff_spell, effect.driver()->effectN( 2 ).average( effect ),
-    [ &negative_buffs ]( stat_e, buff_t* b ) { negative_buffs.push_back( b ); } );
+    [ &negative_buffs ]( stat_e, buff_t* b ) { negative_buffs.push_back( b ); }, false );
 
   if ( negative_buffs.size() > 0 )
   {
@@ -7752,17 +7777,18 @@ void tome_of_lights_devotion( special_effect_t& effect )
 // 1215733 Mass Destruction damage
 void mister_locknstalk( special_effect_t& effect )
 {
+  enum mister_locknstalk_modes_t
+  {
+    MODE_DYNAMIC,
+    MODE_SINGLE_TARGET,
+    MODE_AOE
+  };
+
   struct mister_locknstalk_cb_t : public dbc_proc_callback_t
   {
     action_t* st_damage;
     action_t* aoe_damage;
     action_t* proxy;
-    enum mister_locknstalk_modes_t
-    {
-      MODE_DYNAMIC,
-      MODE_SINGLE_TARGET,
-      MODE_AOE
-    };
     mister_locknstalk_modes_t mode;
     mister_locknstalk_cb_t( const special_effect_t& e )
       : dbc_proc_callback_t( e.player, e ),
@@ -7783,19 +7809,6 @@ void mister_locknstalk( special_effect_t& effect )
       aoe_damage->base_dd_min = aoe_damage->base_dd_max = e.driver()->effectN( 2 ).average( e );
       aoe_damage->base_multiplier                       = role_mult( e.player, e.player->find_spell( 467497 ) );
       proxy->add_child( aoe_damage );
-
-      const auto& option = e.player->thewarwithin_opts.mister_locknstalk_mode;
-      if ( !option.is_default() )
-      {
-        if ( util::str_compare_ci( option, "dynamic" ) )
-          mode = MODE_DYNAMIC;
-        else if ( util::str_compare_ci( option, "single_target" ) )
-          mode = MODE_SINGLE_TARGET;
-        else if ( util::str_compare_ci( option, "aoe" ) )
-          mode = MODE_AOE;
-        else
-          throw std::invalid_argument( "Valid thewarwithin.mister_locknstalk_mode: dynamic, single_target, aoe" );
-      }
     }
 
     void execute( action_t*, action_state_t* s )
@@ -7824,7 +7837,20 @@ void mister_locknstalk( special_effect_t& effect )
 
   effect.proc_flags2_ = PF2_ALL_HIT;
 
-  new mister_locknstalk_cb_t( effect );
+  auto cb = new mister_locknstalk_cb_t( effect );
+
+  const auto& option = effect.player->thewarwithin_opts.mister_locknstalk_mode;
+  if ( !option.is_default() )
+  {
+    if ( util::str_compare_ci( option, "dynamic" ) )
+      cb->mode = MODE_DYNAMIC;
+    else if ( util::str_compare_ci( option, "single_target" ) )
+      cb->mode = MODE_SINGLE_TARGET;
+    else if ( util::str_compare_ci( option, "aoe" ) )
+      cb->mode = MODE_AOE;
+    else
+      throw sc_invalid_apl_argument( "Valid 'thewarwithin.mister_locknstalk_mode' are: dynamic, single_target, aoe" );
+  }
 }
 
 // Junkmaestro's Mega Magnet
@@ -8209,6 +8235,12 @@ void gigazaps_zapcap( special_effect_t& effect )
   effect.custom_buff = ramp_buff;
   new dbc_proc_callback_t( effect.player, effect );
 
+  effect.player->callbacks.register_callback_trigger_function(
+      effect.spell_id, dbc_proc_callback_t::trigger_fn_type::CONDITION,
+      [ max_stack_buff ]( const dbc_proc_callback_t*, action_t*, action_state_t* ) {
+        return !max_stack_buff->check();
+      } );
+
   auto zap = create_proc_action<zap_t>( "zap", effect, max_stack_buff );
 
   effect.player->register_combat_begin( [ effect, zap, max_stack_buff ]( player_t* player ) {
@@ -8270,7 +8302,7 @@ void diamantine_voidcore( special_effect_t& effect )
 // 1239675 Stacking buff
 void unyielding_netherprism( special_effect_t& effect )
 {
-  if ( unique_gear::create_fallback_buffs( effect, { "latent_energy" } ) )
+  if ( unique_gear::create_fallback_buffs( effect, { "latent_energy", "unyielding_netherprism" } ) )
     return;
 
   auto equip_driver = effect.player->find_spell( 1233553 );
@@ -8315,7 +8347,7 @@ void unyielding_netherprism( special_effect_t& effect )
         stacking( stacking_buff )
     {
       base_dd_min = base_dd_max = equip->effectN( 1 ).average( e );
-      base_multiplier *= role_mult( e );
+      base_multiplier *= role_mult( e.player, equip );
 
       name_str_reporting = "unyielding_netherprism";
     }
@@ -8454,9 +8486,9 @@ void astral_antenna( special_effect_t& effect )
 
   auto orb = create_buff<buff_t>( effect.player, "astral_antenna_orb", effect.player->find_spell( 1239640 ) )
                  ->set_stack_behavior( buff_stack_behavior::ASYNCHRONOUS )
-                 ->set_stack_change_callback( [ buff ]( buff_t* b, int, int new_ ) {
-                   if ( new_ )
-                     make_event( *b->source->sim, b->source->rng().range( 500_ms, 3500_ms ), [ b, buff ] {
+                 ->set_stack_change_callback( [ buff ]( buff_t* b, int old_, int new_ ) {
+                   if ( new_ > old_ && !b->source->rng().roll( b->source->thewarwithin_opts.astral_antenna_miss_chance ) )
+                     make_event( *b->source->sim, b->source->rng().gauss_ab( 5_s, 1_s, 500_ms, 19999_ms ), [ b, buff ] {
                        buff->trigger();
                        b->decrement();
                      } );
@@ -8482,14 +8514,20 @@ void screams_of_a_forgotten_sky( special_effect_t& effect )
     double on_death_val;
     action_t* on_death;
 
-    screams_of_a_forgotten_sky_base_t( const special_effect_t& e, std::string_view n, const spell_data_t* s )
-      : generic_proc_t( e, n, s ), debuff_stack_val( 0 ), on_death_val( 0 ), on_death( nullptr )
+    screams_of_a_forgotten_sky_base_t( const special_effect_t& e, std::string_view n, const spell_data_t* s, action_t* on_death )
+      : generic_proc_t( e, n, s ), debuff_stack_val( 0 ), on_death_val( 0 ), on_death( on_death )
     {
       base_dd_min = base_dd_max = e.driver()->effectN( 1 ).average( e );
-      debuff_stack_val = e.driver()->effectN( 2 ).percent();
-      on_death_val = e.driver()->effectN( 3 ).average( e );
-      on_death = create_proc_action<generic_aoe_proc_t>( "astral_implosion", e, 1242901, true );
+      debuff_stack_val          = e.driver()->effectN( 2 ).percent();
+      on_death_val              = e.driver()->effectN( 3 ).average( e );
       base_multiplier *= role_mult( e );
+      if ( player->thewarwithin_opts.screams_of_a_forgotten_sky_initial_stacks > 0 )
+        for ( auto& t : sim->target_list )
+          if ( t->is_enemy() )
+            t->register_on_arise_callback( t, [ &, t ] {
+              if ( auto debuff = get_debuff( t ) )
+                debuff->trigger( player->thewarwithin_opts.screams_of_a_forgotten_sky_initial_stacks );
+            } );
     }
 
     double composite_target_multiplier( player_t* t ) const override
@@ -8508,11 +8546,9 @@ void screams_of_a_forgotten_sky( special_effect_t& effect )
       if ( !buff )
       {
         buff = make_buff( actor_pair_t( t, player ), "abyssal_gravity", data().effectN( 2 ).trigger() );
-        player->register_on_kill_callback( [ &, buff ]( player_t* tar ) {
-          if ( buff->check() )
-          {
+        t->register_on_demise_callback( player, [ &, buff ]( player_t* tar ) {
+          if ( buff->check() && !sim->event_mgr.canceled )
             on_death->execute_on_target( tar, buff->check() * on_death_val );
-          }
         } );
       }
 
@@ -8539,21 +8575,25 @@ void screams_of_a_forgotten_sky( special_effect_t& effect )
     {
       proxy = new action_t( action_e::ACTION_OTHER, "screams_of_a_forgotten_sky", e.player, e.driver() );
 
+      action_t* on_death = create_proc_action<generic_aoe_proc_t>( "abyssal_implosion", e, 1242901, true );
+
       anxoth = create_proc_action<screams_of_a_forgotten_sky_base_t>( "screams_of_a_forgotten_sky_anxoth", e,
                                                                       "screams_of_a_forgotten_sky_anxoth",
-                                                                      e.player->find_spell( 1242875 ) );
+                                                                      e.player->find_spell( 1242875 ), on_death );
 
       anzuq  = create_proc_action<screams_of_a_forgotten_sky_base_t>( "screams_of_a_forgotten_sky_anzuq", e, 
                                                                       "screams_of_a_forgotten_sky_anzuq", 
-                                                                      e.player->find_spell( 1242895 ) );
+                                                                      e.player->find_spell( 1242895 ), on_death );
 
       anshuul = create_proc_action<screams_of_a_forgotten_sky_base_t>( "screams_of_a_forgotten_sky_anshuul", e,
                                                                        "screams_of_a_forgotten_sky_anshuul",
-                                                                       e.player->find_spell( 1242897 ) );
+                                                                       e.player->find_spell( 1242897 ), on_death );
 
       actions.push_back( anxoth );
       actions.push_back( anzuq );
       actions.push_back( anshuul );
+
+      proxy->add_child( on_death );
 
       for ( auto a : actions )
         proxy->add_child( a );
@@ -8561,7 +8601,20 @@ void screams_of_a_forgotten_sky( special_effect_t& effect )
 
     void execute( action_t*, action_state_t* s ) override
     {
-      actions[ rng().range( actions.size() ) ]->execute_on_target( s->target );
+      buff_t* debuff = actions[ 0 ]->get_debuff( s->target );
+      if ( !debuff )
+      {
+        listener->sim->error( "Screams of a Forgotten Sky: No debuff found for target {} for player {}",
+                              s->target->name(), listener->name() );
+        return;
+      }
+      if ( debuff->check() < 5 )
+        actions[ 0 ]->execute_on_target( s->target );
+      else if ( debuff->check() >= 5 && debuff->check() < 9 )
+        actions[ 1 ]->execute_on_target( s->target );
+      else
+        actions[ 2 ]->execute_on_target( s->target );
+
       proxy->stats->add_execute( 0_ms, s->target );
     }
   };
@@ -8822,6 +8875,8 @@ void perfidious_projector( special_effect_t& effect )
   auto damage         = create_proc_action<generic_aoe_proc_t>( "shadowguard_to_me", effect, 1244448, true );
   auto damage_val     = value_spell->effectN( 1 ).average( effect ) / n_ticks;
   damage->base_dd_min = damage->base_dd_max = damage_val;
+  // not present in tooltip desc, fallback to default value
+  damage->base_multiplier = role_mult( effect.player );
 
   auto dot         = create_proc_action<generic_proc_t>( "perfidious_projector", effect, dot_spell );
   dot->tick_action = damage;
@@ -8834,7 +8889,7 @@ void perfidious_projector( special_effect_t& effect )
 // 1243133 Damage
 void incorporeal_warpclaw( special_effect_t& effect )
 {
-  auto damage         = create_proc_action<generic_aoe_proc_t>( "incorporeal_warpstrike", effect, 1243133 );
+  auto damage         = create_proc_action<generic_aoe_proc_t>( "incorporeal_warpstrike", effect, 1243133, true );
   damage->base_dd_min = damage->base_dd_max = effect.driver()->effectN( 1 ).average( effect );
   damage->base_multiplier *= role_mult( effect );
 
@@ -8927,7 +8982,14 @@ void incorporeal_essence_gorger( special_effect_t& effect )
     void impact( action_state_t* s ) override
     {
       generic_proc_t::impact( s );
-      buffs.at( util::lowest_stat( player, secondary_ratings ) )->trigger();
+      if ( player->thewarwithin_opts.incorporeal_essence_gorger_ethereal )
+      {
+        buffs.at( util::highest_stat( player, secondary_ratings ) )->trigger();
+      }
+      else
+      {
+        buffs.at( util::lowest_stat( player, secondary_ratings ) )->trigger();
+      }
     }
   };
 
@@ -9087,6 +9149,7 @@ void soulbinders_embrace( special_effect_t& effect )
 
   auto damage = create_proc_action<generic_aoe_proc_t>( "soulbinders_embrace", effect, 1235633 );
   damage->base_dd_min = damage->base_dd_max = equip_data->effectN( 2 ).average( effect );
+  damage->split_aoe_damage = false;
 
   effect.execute_action = damage;
 }
@@ -9137,7 +9200,8 @@ void brand_of_ceaseless_ire( special_effect_t& effect )
 
   // assume full uptime in dungeons since we're always getting hit
   if ( effect.player->sim->fight_style == FIGHT_STYLE_DUNGEON_SLICE ||
-       effect.player->sim->fight_style == FIGHT_STYLE_DUNGEON_ROUTE )
+       effect.player->sim->fight_style == FIGHT_STYLE_DUNGEON_ROUTE ||
+       effect.player->thewarwithin_opts.brand_of_ceaseless_ire_force_full_uptime )
   {
     effect.proc_flags_ = PF_MELEE_ABILITY;
     effect.proc_flags2_ = PF2_LANDED;
@@ -9423,8 +9487,7 @@ void automatic_footbomb_dispenser( special_effect_t& effect )
     automatic_footbomb_dispenser_proxy_buff_t( const special_effect_t& e )
       : buff_t( e.player, "automatic_footbomb_dispenser", e.player->find_spell( 1234025 ) )
     {
-      auto damage = create_proc_action<generic_aoe_proc_t>( "footbomb_to_the_face", e, 1234219 );
-      damage->split_aoe_damage = false;
+      auto damage = create_proc_action<generic_aoe_proc_t>( "footbomb_to_the_face", e, 1234219, true );
       damage->base_dd_min = damage->base_dd_max = e.driver()->effectN( 1 ).average( e );
       damage->base_multiplier *= role_mult( e );
 
@@ -9458,6 +9521,62 @@ void observers_soul_fetters( special_effect_t& effect )
 
   effect.custom_buff = create_buff<stat_buff_t>( effect.player, effect.driver() )
     ->add_stat_from_effect_type( A_MOD_STAT, coeff->driver()->effectN( 1 ).average( effect ) );
+}
+
+// nexus-king's command
+// 1232776 driver
+// 1239997 debuff
+// 1240000 buff
+// 1240002 shield NYI
+void nexuskings_command( special_effect_t& effect )
+{
+  if ( unique_gear::create_fallback_buffs( effect, { "oathbound", "boon_of_the_oathsworn" } ) )
+    return;
+
+  // emulate this as a buff on player for APL purposes
+  auto bound = create_buff<buff_t>( effect.player, effect.player->find_spell( 1239997 ) );
+
+  // for normal sims assume max 20 stack to represent 20 man raid. for dungeon sims limit to 5 stacks
+  if ( effect.player->sim->fight_style == FIGHT_STYLE_DUNGEON_SLICE ||
+       effect.player->sim->fight_style == FIGHT_STYLE_DUNGEON_ROUTE )
+  {
+    bound->set_max_stack( 5 );
+  }
+  else
+  {
+    bound->set_max_stack( 20 );
+  }
+
+  // start precombat with a stack of the debuff
+  effect.player->register_precombat_begin( bound );
+
+  // debuff is wiped on pull, gain a debuff every 30s during combat
+  effect.player->register_combat_begin( [ bound, dur = effect.driver()->effectN( 1 ).period() ]( player_t* ) {
+    bound->expire();
+    make_event( *bound->sim, bound->rng().range( 0_ms, dur ), [ bound, dur ] {
+      bound->trigger();
+      make_repeating_event( *bound->sim, dur, [ bound ] { bound->trigger(); } );
+    } );
+  } );
+
+  // assume you always heal the debuffed target
+  effect.custom_buff = create_buff<stat_buff_t>( effect.player, effect.player->find_spell( 1240000 ) )
+    ->set_stat_from_effect_type( A_MOD_STAT, effect.driver()->effectN( 1 ).average( effect ) );
+
+  effect.player->callbacks.register_callback_trigger_function( effect.driver()->id(),
+    dbc_proc_callback_t::trigger_fn_type::CONDITION,
+    []( const dbc_proc_callback_t*, action_t* a, const action_state_t* ) {
+      return a->data().affected_by_label( LABEL_HEALING_SPELLS );
+    } );
+
+  effect.player->callbacks.register_callback_execute_function( effect.driver()->id(),
+    [ bound ]( const dbc_proc_callback_t* cb, action_t*, const action_state_t* ) {
+      cb->proc_buff->trigger();
+      bound->decrement();
+    } );
+
+  auto cb = new dbc_proc_callback_t( effect.player, effect );
+  cb->activate_with_buff( bound );
 }
 
 // Weapons
@@ -9602,7 +9721,7 @@ void befoulers_syringe( special_effect_t& effect )
   effect.player->callbacks.register_callback_execute_function( on_next->spell_id,
       [ bloodlust, strike ]( const dbc_proc_callback_t*, action_t* a, const action_state_t* s ) {
         strike->execute_on_target( s->target );
-        bloodlust->expire( a );
+        bloodlust->consume( a );
       } );
 
   auto cb = new dbc_proc_callback_t( effect.player, *on_next );
@@ -9661,6 +9780,12 @@ void harvesters_interdiction( special_effect_t& effect )
   dot->base_multiplier *= role_mult( effect );
 
   effect.execute_action = dot;
+  // adjust rppm if harvester's edict (451055) is equipped
+  if ( find_special_effect( effect.player, 451055 ) )
+  {
+    effect.rppm_modifier_ =
+      effect.player->dbc->real_ppm_modifier( effect.driver()->id(), effect.player, effect.item->item_level(), 451055 );
+  }
 
   new dbc_proc_callback_t( effect.player, effect );
 }
@@ -10023,56 +10148,28 @@ void voidglass_shards( special_effect_t& effect )
       damage = create_proc_action<generic_proc_t>( "voidglass_shards", e, 1238693 );
       damage->base_dd_min = damage->base_dd_max = e.driver()->effectN( 1 ).average( e );
       damage->base_multiplier *= role_mult( e );
-
-      // the chance for a proc to be damage vs shield seems to depend on spec. some spec have a high chance (90%) to
-      // proc damage, whilst other spec have low (10%) chance. this will need to be confirmed and re-test per spec
-      // once 11.2 is live
-      switch ( e.player->specialization() )
-      {
-        // high (~90%)
-        case EVOKER_DEVASTATION:
-        case MAGE_FIRE:
-        case MAGE_FROST:
-        case SHAMAN_ELEMENTAL:
-        case WARLOCK_AFFLICTION:
-        case WARLOCK_DEMONOLOGY:  damage_chance = 0.90; break;
-        // mid-high (~66%)
-        case EVOKER_AUGMENTATION: damage_chance = 0.66; break;
-        // medium (~50%)
-        case MAGE_ARCANE:
-        case WARLOCK_DESTRUCTION: damage_chance = 0.50; break;
-        // mid-low (~33%)
-        case DRUID_BALANCE:
-        case PRIEST_SHADOW:       damage_chance = 0.33; break;
-        // low chance (~10%)
-        case DRUID_RESTORATION:   damage_chance = 0.10; break;
-        default:                  damage_chance = 0.00; break;
-      }
-
-      std::string _msg;
-
-      if ( damage_chance )
-        _msg = "Simc is using an unreliable estimate.";
-      else
-        _msg = "is disabled in SimC for this spec.";
-
-      e.player->sim->error( "The chance for Shards of the Void to proc damage vs shield for {} is unknown and {}",
-                            util::specialization_string( e.player->specialization() ), _msg );
     }
 
     void execute( action_t*, action_state_t* s ) override
     {
-      if ( rng().roll( damage_chance ) )
+      if ( s->result_type == result_amount_type::DMG_DIRECT || s->result_type == result_amount_type::DMG_OVER_TIME )
       {
-        if ( !s->target->is_enemy() )
-          damage->execute_on_target( listener->target );
-        else
-          damage->execute_on_target( s->target );
+        damage->execute_on_target( s->target );
       }
     }
   };
 
+  effect.proc_flags2_ = PF2_ALL_HIT;
+
   new voidglass_shards_cb_t( effect );
+}
+
+// warplance strike
+// 1243411 driver
+void warplance_strike( special_effect_t& effect )
+{
+  effect.aoe = -1;
+  effect.discharge_amount = effect.driver()->effectN( 1 ).average( effect ) * role_mult( effect );
 }
 
 // Armor
@@ -12562,6 +12659,7 @@ void register_special_effects()
   register_special_effect( 1234022, items::automatic_footbomb_dispenser );
   register_special_effect( 1230285, items::observers_soul_fetters );
   register_special_effect( 1230281, DISABLED_EFFECT );  // observer's soul fetters
+  register_special_effect( 1232776, items::nexuskings_command, true );
   reset_version_check();
 
   // Weapons
@@ -12580,6 +12678,7 @@ void register_special_effects()
   register_special_effect( 1224457, items::shadow_quake );
   set_min_version( wowv_t( 11, 2, 0 ) );
   register_special_effect( 1235136, items::voidglass_shards );
+  register_special_effect( 1243411, items::warplance_strike );
   reset_version_check();
 
   // Armor
@@ -12657,5 +12756,17 @@ double writhing_mul( player_t* p )
     return 2.0;  // hardcoded
   else
     return 1.0;
+}
+
+// attuned to the aether renown perk
+double attuned_mul( player_t* p, const spell_data_t* spell )
+{
+  if ( !p->thewarwithin_opts.attuned_to_the_aether )
+    return 1.0;
+
+  auto attuned = p->find_spell( 1242344 );
+  const auto& eff = spell_data_t::find_spelleffect( *attuned, *spell, E_APPLY_AURA );
+
+  return 1.0 + eff.percent();
 }
 }  // namespace unique_gear::thewarwithin

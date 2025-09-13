@@ -56,8 +56,6 @@ namespace actions::spells
 struct shadowy_apparition_spell_t;
 struct psychic_link_t;
 struct shadow_weaving_t;
-struct echoing_void_t;
-struct echoing_void_demise_t;
 struct shadow_word_death_t;
 struct idol_of_cthun_t;
 struct shadow_word_pain_t;
@@ -108,8 +106,6 @@ public:
   {
     propagate_const<buff_t*> schism;
     propagate_const<buff_t*> death_and_madness_debuff;
-    propagate_const<buff_t*> echoing_void;
-    propagate_const<buff_t*> echoing_void_collapse;
     propagate_const<buff_t*> apathy;
     propagate_const<buff_t*> psychic_horror;
     buff_t* atonement;
@@ -224,8 +220,6 @@ public:
     propagate_const<buff_t*> shadowform_state;  // Dummy buff to track whether player entered Shadowform initially
     propagate_const<buff_t*> void_torrent;
     propagate_const<buff_t*> voidform;
-    propagate_const<buff_t*> unfurling_darkness;
-    propagate_const<buff_t*> unfurling_darkness_cd;  // Blizzard uses a buff to track the ICD
     propagate_const<buff_t*> ancient_madness;
     propagate_const<buff_t*> mind_devourer;
     propagate_const<buff_t*> shadowy_insight;
@@ -234,16 +228,9 @@ public:
     propagate_const<buff_t*> thing_from_beyond;
     propagate_const<buff_t*> screams_of_the_void;
     propagate_const<buff_t*> idol_of_yoggsaron;
-    propagate_const<buff_t*> devoured_pride;
-    propagate_const<buff_t*> devoured_despair;
-    propagate_const<buff_t*> devoured_anger;
-    propagate_const<buff_t*> dark_evangelism;
-    propagate_const<buff_t*> mind_melt;
     propagate_const<buff_t*> surge_of_insanity;
     propagate_const<buff_t*> mind_flay_insanity;
-    propagate_const<buff_t*> mind_spike_insanity;
     propagate_const<buff_t*> dark_ascension;
-    propagate_const<buff_t*> last_shadowy_apparition_crit;
     propagate_const<buff_t*> call_of_the_void;
     propagate_const<buff_t*> overburdened_mind;
     propagate_const<buff_t*> shattered_psyche;
@@ -252,11 +239,7 @@ public:
     propagate_const<buff_t*> vision_of_nzoth;
 
     // Tier Sets
-    propagate_const<buff_t*> gathering_shadows;
-    propagate_const<buff_t*> dark_reveries;
     propagate_const<buff_t*> light_weaving;
-    propagate_const<buff_t*> darkflame_embers;
-    propagate_const<buff_t*> darkflame_shroud;
     propagate_const<buff_t*> devouring_chorus;
     propagate_const<buff_t*> darkness_from_light;
     propagate_const<buff_t*> ascension;         // TWW3 Archon Set 2pc
@@ -385,17 +368,14 @@ public:
       player_talent_t mind_flay_insanity;
       const spell_data_t* mind_flay_insanity_spell;
       player_talent_t surge_of_insanity;
-      const spell_data_t* mind_spike_insanity_spell;
       // Row 5
       player_talent_t shadowy_insight;
       player_talent_t voidtouched;
-      player_talent_t unfurling_darkness;
+      player_talent_t dark_ascension;
       player_talent_t void_eruption;
       const spell_data_t* void_eruption_damage;
-      player_talent_t dark_ascension;
       player_talent_t mental_decay;
       player_talent_t shattered_psyche;
-      player_talent_t mind_spike;
       player_talent_t shadow_crash;
       player_talent_t shadow_crash_target;
       // Row 6
@@ -403,9 +383,7 @@ public:
       player_talent_t dark_thoughts;
       player_talent_t maddening_touch;
       const spell_data_t* maddening_touch_insanity;
-      player_talent_t whispering_shadows;
       player_talent_t ancient_madness;
-      player_talent_t mind_melt;
       player_talent_t phantom_menace;
       player_talent_t dark_evangelism;
       player_talent_t descending_darkness;
@@ -426,25 +404,17 @@ public:
       player_talent_t screams_of_the_void;
       player_talent_t tormented_spirits;
       player_talent_t insidious_ire;
-      player_talent_t malediction;
       player_talent_t void_volley;
       const spell_data_t* void_volley_buff;
       const spell_data_t* void_volley_missile;
       const spell_data_t* void_volley_damage;
       // Row 10
       player_talent_t idol_of_yshaarj;
-      const spell_data_t* devoured_pride;
-      const spell_data_t* devoured_despair;
-      const spell_data_t* devoured_anger;
-      const spell_data_t* devoured_fear;
-      const spell_data_t* devoured_violence;
       const spell_data_t* call_of_the_void;
       const spell_data_t* overburdened_mind;
       player_talent_t idol_of_nzoth;
       player_talent_t idol_of_yoggsaron;
       player_talent_t idol_of_cthun;
-      const spell_data_t* echoing_void;
-      const spell_data_t* echoing_void_debuff;
       const spell_data_t* horrific_visions;        // enemy debuff
       const spell_data_t* horrific_vision_damage;  // 50 stack damage
       const spell_data_t* vision_of_nzoth_damage;  // 100 stack damage
@@ -758,7 +728,6 @@ public:
     // Shadow
     propagate_const<cooldown_t*> void_bolt;
     propagate_const<cooldown_t*> mind_blast;
-    propagate_const<cooldown_t*> void_eruption;
     propagate_const<cooldown_t*> maddening_touch_icd;
 
     // Discipline
@@ -766,7 +735,6 @@ public:
     propagate_const<cooldown_t*> ultimate_penitence;
 
     // Holy
-    propagate_const<cooldown_t*> holy_fire;
     propagate_const<cooldown_t*> holy_word_chastise;
     propagate_const<cooldown_t*> holy_word_serenity;
     propagate_const<cooldown_t*> holy_word_sanctify;
@@ -793,7 +761,6 @@ public:
     propagate_const<gain_t*> shadowfiend;
     propagate_const<gain_t*> voidwraith;
     propagate_const<gain_t*> power_of_the_dark_side;
-    propagate_const<gain_t*> power_word_solace;
     propagate_const<gain_t*> throes_of_pain;
     propagate_const<gain_t*> insanity_idol_of_cthun_mind_flay;
     propagate_const<gain_t*> insanity_idol_of_cthun_mind_sear;
@@ -825,7 +792,6 @@ public:
     propagate_const<proc_t*> shadowy_apparition_swp;
     propagate_const<proc_t*> shadowy_apparition_dp;
     propagate_const<proc_t*> shadowy_apparition_mb;
-    propagate_const<proc_t*> shadowy_apparition_msi;
     propagate_const<proc_t*> shadowy_apparition_mfi;
     propagate_const<proc_t*> mind_devourer;
     propagate_const<proc_t*> void_tendril;
@@ -834,19 +800,21 @@ public:
     propagate_const<proc_t*> shadowy_insight_overflow;
     propagate_const<proc_t*> shadowy_insight_missed;
     propagate_const<proc_t*> thing_from_beyond;
-    propagate_const<proc_t*> idol_of_nzoth_swp;
-    propagate_const<proc_t*> idol_of_nzoth_vt;
     propagate_const<proc_t*> mind_flay_insanity_wasted;
     propagate_const<proc_t*> void_torrent_ticks_no_mastery;
     propagate_const<proc_t*> mindgames_casts_no_mastery;
     propagate_const<proc_t*> inescapable_torment_missed_mb;
     propagate_const<proc_t*> inescapable_torment_missed_swd;
-    propagate_const<proc_t*> shadowy_apparition_crit;
     propagate_const<proc_t*> depth_of_shadows;
     // Holy
     propagate_const<proc_t*> divine_favor_chastise;
     propagate_const<proc_t*> divine_image;
   } procs;
+
+  struct sample_data_t
+  {
+    std::unique_ptr<extended_sample_data_t> voidform_duration;
+  } sample_data;
 
   // Special
   struct
@@ -854,9 +822,7 @@ public:
     propagate_const<actions::spells::psychic_link_t*> psychic_link;
     propagate_const<actions::spells::shadow_weaving_t*> shadow_weaving;
     propagate_const<actions::spells::shadowy_apparition_spell_t*> shadowy_apparitions;
-    propagate_const<actions::spells::echoing_void_t*> echoing_void;
     propagate_const<actions::spells::shadow_word_death_t*> shadow_word_death;
-    propagate_const<actions::spells::echoing_void_demise_t*> echoing_void_demise;
     propagate_const<actions::spells::idol_of_cthun_t*> idol_of_cthun;
     propagate_const<actions::spells::shadow_word_pain_t*> shadow_word_pain;
     propagate_const<actions::spells::mental_fortitude_t*> mental_fortitude;
@@ -925,10 +891,6 @@ public:
     // Only takes into account if you have not overriden initial_resource=insanity=X to something greater than 0
     bool init_insanity = true;
 
-    // Forces Idol of Y'Shaarj to give a particular buff for every cast
-    // default, pride, anger, despair, fear (NYI), violence
-    std::string forced_yshaarj_type = "default";
-
     double twist_of_fate_heal_rppm                = 0.0;
     timespan_t twist_of_fate_heal_duration_mean   = 2_s;
     timespan_t twist_of_fate_heal_duration_stddev = 0.25_s;
@@ -980,6 +942,7 @@ public:
   action_t* create_action( util::string_view name, util::string_view options ) override;
   void create_pets() override;
   void copy_from( player_t* source ) override;
+  void merge( player_t& ) override;
   resource_e primary_resource() const override
   {
     return RESOURCE_MANA;
@@ -1011,6 +974,7 @@ public:
   std::vector<std::string> action_names_from_spell_id( unsigned int spell_id ) const override;
   std::string aura_expr_from_spell_id( unsigned int spell_id, bool on_self ) const override;
   void combat_begin() override;
+  void init_uptimes() override;
   void init_rng() override;
   const priest_td_t* find_target_data( const player_t* target ) const override;
   priest_td_t* get_target_data( player_t* target ) const override;
@@ -1060,13 +1024,11 @@ public:
   double generate_insanity( double num_amount, gain_t* g, action_t* action );
   double tick_damage_over_time( timespan_t duration, const dot_t* dot ) const;
   void trigger_inescapable_torment( player_t* target, bool echo = false, double mod = 1.0 );
-  void trigger_idol_of_yshaarj( player_t* target );
   void trigger_idol_of_cthun( action_state_t* );
   void trigger_atonement( action_state_t*, double );
   void trigger_divine_aegis( action_state_t* );
   void spawn_idol_of_cthun( action_state_t* );
   void trigger_shadowy_apparitions( proc_t* proc );
-  int number_of_echoing_voids_active();
   void trigger_psychic_link( action_state_t* );
   void trigger_shadow_weaving( action_state_t* );
   void trigger_void_shield( double result_amount );
@@ -1772,7 +1734,6 @@ struct priest_spell_t : public priest_action_t<spell_t>
 
     if ( affected_by_shadow_weaving )
     {
-      // Guarding against Unfurling Darkness, it does not get the mastery benefit
       unsigned int spell_id = id;
       if ( ignores_automatic_mastery )
       {

@@ -4104,20 +4104,26 @@ struct item_effect_expr_t : public item_effect_base_expr_t
   }
 };
 
-// Buff based item expressions, creates buff expressions for the items from
-// user input
+// Buff based item expressions, creates buff expressions for the items from user input
 struct item_buff_expr_t : public item_effect_expr_t
 {
-  item_buff_expr_t( player_t& player, const std::vector<slot_e>& slots, stat_e s, bool stacking, util::string_view expr_str ) :
-    item_effect_expr_t( player, slots, expr_str )
+  item_buff_expr_t( player_t& player, const std::vector<slot_e>& slots, stat_e s, bool stacking,
+                    util::string_view expr_str )
+    : item_effect_expr_t( player, slots, expr_str )
   {
-    for (auto e : effects)
+    for ( auto e : effects )
     {
-      buff_t* b = buff_t::find( &player, e -> name() );
-      if ( buff_has_stat( b, s ) && ( ! stacking || ( stacking && b -> max_stack() > 1 ) ) )
+      auto _list = e->buff_list;  // make a copy
+      if ( auto _buff = buff_t::find( &player, e->name() ) )
+        _list.push_back( _buff );
+
+      for ( auto b : _list )
       {
-        if ( auto expr_obj = buff_t::create_expression( b -> name(), expr_str, *b ) )
-          exprs.push_back( std::move(expr_obj) );
+        if ( buff_has_stat( b, s ) && ( !stacking || ( stacking && b->max_stack() > 1 ) ) )
+        {
+          if ( auto expr_obj = buff_t::create_expression( b->name(), expr_str, *b ) )
+            exprs.push_back( std::move( expr_obj ) );
+        }
       }
     }
   }
@@ -4127,17 +4133,27 @@ struct item_buff_exists_expr_t : public item_effect_expr_t
 {
   double v;
 
-  item_buff_exists_expr_t( player_t& player, const std::vector<slot_e>& slots, stat_e s, util::string_view full_expression ) :
-    item_effect_expr_t( player, slots, full_expression ), v( 0 )
+  item_buff_exists_expr_t( player_t& player, const std::vector<slot_e>& slots, stat_e s,
+                           util::string_view full_expression )
+    : item_effect_expr_t( player, slots, full_expression ), v( 0 )
   {
-    for (auto e : effects)
+    for ( auto e : effects )
     {
-      buff_t* b = buff_t::find( &player, e -> name() );
-      if ( buff_has_stat( b, s ) )
+      auto _list = e->buff_list;  // make a copy
+      if ( auto _buff = buff_t::find( &player, e->name() ) )
+        _list.push_back( _buff );
+
+      for ( auto b : _list )
       {
-        v = 1;
-        break;
+        if ( buff_has_stat( b, s ) )
+        {
+          v = 1;
+          break;
+        }
       }
+
+      if ( v == 1 )
+        break;
     }
   }
 
@@ -4572,7 +4588,7 @@ std::unique_ptr<expr_t> unique_gear::create_expression( player_t& player, util::
   if ( splits.size() <= ptype_idx )
   {
     throw std::invalid_argument(
-      fmt::format( "Cannot create unique gear expression: too few parts '{}' < '{}'.", splits.size(), ptype_idx + 1 ) );
+      fmt::format( "'{}' parts required, only '{}' provided.", ptype_idx + 1, splits.size() ) );
   }
 
   if ( util::str_compare_ci( splits[ ptype_idx ], "is" ) )
@@ -4623,8 +4639,7 @@ std::unique_ptr<expr_t> unique_gear::create_expression( player_t& player, util::
     if ( splits.size() <= stat_idx )
     {
       throw std::invalid_argument(
-        fmt::format( "Cannot create unique gear expression: too few parts to parse stat: '{}' < '{}'.", splits.size(),
-                     stat_idx + 1 ) );
+        fmt::format( "'{}' parts required, only '{}' provided.", stat_idx + 1, splits.size() ) );
     }
     // Use "all stat" to indicate "any" ..
     if ( util::str_compare_ci( splits[ stat_idx ], "any" ) )
@@ -4636,7 +4651,7 @@ std::unique_ptr<expr_t> unique_gear::create_expression( player_t& player, util::
       stat = util::parse_stat_type( splits[ stat_idx ] );
       if ( stat == STAT_NONE )
       {
-        throw std::invalid_argument( fmt::format( "Cannot parse stat '{}'.", splits[ stat_idx ] ) );
+        throw std::invalid_argument( fmt::format( "Invalid stat '{}'.", splits[ stat_idx ] ) );
       }
     }
   }
@@ -4646,8 +4661,7 @@ std::unique_ptr<expr_t> unique_gear::create_expression( player_t& player, util::
     if ( splits.size() <= expr_idx )
     {
       throw std::invalid_argument(
-        fmt::format( "Cannot create unique gear expression: too few parts to parse buff expression: '{}' < '{}'.",
-                     splits.size(), expr_idx + 1 ) );
+        fmt::format( "'{}' parts required, only '{}' provided.", expr_idx + 1, splits.size() ) );
     }
     return std::make_unique<item_buff_expr_t>( player, slots, stat, ptype == PROC_STACKING_STAT, splits[ expr_idx ] );
   }
@@ -4674,7 +4688,7 @@ std::unique_ptr<expr_t> unique_gear::create_expression( player_t& player, util::
   if ( util::str_compare_ci (splits[ ptype_idx ], "cooldown_category" ) )
     return std::make_unique<item_cooldown_category_expr_t>( player, slots, name_str );
 
-  throw std::invalid_argument( fmt::format( "Unsupported unique gear expression '{}'.", splits.back() ) );
+  throw std::invalid_argument( fmt::format( "Invalid unique gear expression '{}'.", splits.back() ) );
 }
 
 namespace unique_gear

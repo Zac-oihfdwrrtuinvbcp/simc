@@ -1,6 +1,3 @@
-# TODO: remove this when PTR data goes live
-ptr=1
-
 # TWW3
 # TWW Season 2
 # * Set pieces are permitted up to the item level cap (723). ["bonus_id=?/?"]
@@ -37,7 +34,7 @@ TWW3_Generate_Druid.simc
 TWW3_Generate_Evoker.simc
 
 # Hunter
-# TWW3_Generate_Hunter.simc
+TWW3_Generate_Hunter.simc
 
 # Mage
 TWW3_Generate_Mage.simc

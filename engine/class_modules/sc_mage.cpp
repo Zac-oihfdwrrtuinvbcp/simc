@@ -1281,8 +1281,9 @@ struct arcane_phoenix_spell_t : public mage_pet_spell_t
     for ( int ix : { 10, 11 } )
       if ( data().affected_by_label( o()->spec.arcane_mage->effectN( ix ) ) )
         base_dd_multiplier *= 1.0 + o()->spec.arcane_mage->effectN( ix ).percent();
-    if ( data().affected_by_label( o()->spec.fire_mage->effectN( 14 ) ) )
-      base_dd_multiplier *= 1.0 + o()->spec.fire_mage->effectN( 14 ).percent();
+    for ( int ix : { 14, 25, 26, 27, 28, 29, 30 } )
+      if ( data().affected_by_label( o()->spec.fire_mage->effectN( ix ) ) )
+        base_dd_multiplier *= 1.0 + o()->spec.fire_mage->effectN( ix ).percent();
   }
 
   double action_multiplier() const override
@@ -3441,6 +3442,23 @@ struct ignite_t final : public residual_action::residual_periodic_action_t<spell
       double tick_amount = p->bugs ? base_ta( d->state ) : d->state->result_total;
       intensifying_flame->execute_on_target( d->target, p->talents.intensifying_flame->effectN( 2 ).percent() * tick_amount );
     }
+  }
+
+  double composite_target_multiplier( player_t* target ) const override
+  {
+    double m = residual_action_t::composite_target_multiplier( target );
+
+    if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 5 } )  // TODO: Remove PTR check
+    {
+      auto p = debug_cast<mage_t*>( player );
+      if ( auto td = p->find_target_data( target ) )
+      {
+        m *= 1.0 + td->debuffs.improved_scorch->check_stack_value();
+        m *= 1.0 + td->debuffs.molten_fury->check_value();
+      }
+    }
+
+    return m;
   }
 };
 
@@ -9435,7 +9453,7 @@ std::unique_ptr<expr_t> mage_t::create_action_expression( action_t& action, std:
       { return action.get_expression_target()->time_to_percent( actual_pct ).total_seconds(); } );
     }
 
-    throw std::invalid_argument( fmt::format( "Unknown {} operation '{}'", splits[ 0 ], splits[ 1 ] ) );
+    throw sc_invalid_apl_argument( fmt::format( "Unknown {} operation '{}'.", splits[ 0 ], splits[ 1 ] ) );
   };
 
   if ( splits.size() == 2 && util::str_compare_ci( splits[ 0 ], "firestarter" ) )
@@ -9606,7 +9624,7 @@ std::unique_ptr<expr_t> mage_t::create_expression( std::string_view name )
     }
 
     if ( type == AOE_MAX )
-      throw std::invalid_argument( fmt::format( "Unknown ground_aoe type '{}'", splits[ 1 ] ) );
+      throw sc_invalid_apl_argument( fmt::format( "Unknown ground_aoe type '{}'.", splits[ 1 ] ) );
 
     if ( util::str_compare_ci( splits[ 2 ], "remains" ) )
     {
@@ -9614,7 +9632,7 @@ std::unique_ptr<expr_t> mage_t::create_expression( std::string_view name )
       { return std::max( ground_aoe_expiration[ type ] - sim->current_time(), 0_ms ).total_seconds(); } );
     }
 
-    throw std::invalid_argument( fmt::format( "Unknown ground_aoe operation '{}'", splits[ 2 ] ) );
+    throw sc_invalid_apl_argument( fmt::format( "Unknown ground_aoe operation '{}'.", splits[ 2 ] ) );
   }
 
   // Time remaining until the specified Incanter's Flow stack.
@@ -9624,7 +9642,7 @@ std::unique_ptr<expr_t> mage_t::create_expression( std::string_view name )
   {
     int expr_stack = util::to_int( splits[ 1 ] );
     if ( expr_stack < 1 || expr_stack > buffs.incanters_flow->max_stack() )
-      throw std::invalid_argument( fmt::format( "Invalid incanters_flow_time_to stack number '{}'", splits[ 1 ] ) );
+      throw sc_invalid_apl_argument( fmt::format( "Invalid incanters_flow_time_to stack number '{}'.", splits[ 1 ] ) );
 
     // Number of ticks in one full cycle.
     int tick_cycle = buffs.incanters_flow->max_stack() * 2;
@@ -9646,7 +9664,7 @@ std::unique_ptr<expr_t> mage_t::create_expression( std::string_view name )
     }
     else
     {
-      throw std::invalid_argument( fmt::format( "Unknown incanters_flow_time_to stack type '{}'", splits[ 2 ] ) );
+      throw sc_invalid_apl_argument( fmt::format( "Unknown incanters_flow_time_to stack type '{}'.", splits[ 2 ] ) );
     }
 
     return make_fn_expr( name, [ this, tick_cycle, expr_pos_lo, expr_pos_hi ]

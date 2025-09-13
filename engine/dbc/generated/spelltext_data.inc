@@ -1,5 +1,5 @@
-// Spell text, wow build 11.2.0.62387
-static constexpr std::array<spelltext_data_t, 28029> __spelltext_data { {
+// Spell text, wow build 11.2.0.63003
+static constexpr std::array<spelltext_data_t, 28034> __spelltext_data { {
   {      17, "Shields an ally for $d, absorbing $s1 damage.", "Absorbs $w1 damage.", 0 },
   {      53, "Stab the target, causing ${$s2*$<mult>} Physical damage. Damage increased by $s4% when you are behind your target$?s319949[, and critical strikes apply Find Weakness for $319949s1 sec][].\r\n\r\n|cFFFFFFFFAwards $s3 combo $lpoint:points;.|r", 0, 0 },
   {      56, "Stuns target for $d.", "Stunned.", 0 },
@@ -16200,7 +16200,7 @@ static constexpr std::array<spelltext_data_t, 28029> __spelltext_data { {
   {  351239, "Switch between your Dracthyr and Visage forms.\r\n\r\nYour Visage emanates magic, significantly increasing out-of-combat health regeneration for your party.", 0, "Racial" },
   {  351243, "Become enraged after being disarmed, increasing your size by $s1% and auto attack damage by $s2%.", "Auto attack damage increased by $w2%.\r\nSize increased by $w1%.", 0 },
   {  351308, "$@spelldesc351316", 0, 0 },
-  {  351316, "Taking damage grants you a chance to unleash the First Technique for $d, reflecting $s2% of incoming damage, up to a maximum of ${$s1*(1+$@versadmg)} damage absorbed per blow.", "Reflecting $s2% of incoming damage, up to a maximum of ${$s1*(1+$@versadmg)} damage absorbed per blow.", 0 },
+  {  351316, "Taking damage grants you a chance to unleash the First Technique for $d, reflecting $s2% of incoming damage, up to a maximum of ${$s1*(1+$@versadmg)} damage absorbed.", "Reflecting $s2% of incoming damage, up to a maximum of ${$s1*(1+$@versadmg)} damage absorbed.", 0 },
   {  351338, "Interrupt an enemy's spellcasting and prevent any spell from that school of magic from being cast for $d.", 0, 0 },
   {  351414, "$@spelldesc350899", "Mastery increased by $w1.", 0 },
   {  351433, "$@spelldesc350935", "Maximum health is increased by $s1%.", 0 },
@@ -16261,7 +16261,7 @@ static constexpr std::array<spelltext_data_t, 28029> __spelltext_data { {
   {  352415, "While below $s1% health, Door of Shadows cools down $353210s1% faster.", 0, 0 },
   {  352417, "Each nearby enemy trembles at your presence, increasing your damage and healing done by $352858s1%, and reducing damage taken by $352858s4%, up to a maximum of $352858u enemies.", 0, 0 },
   {  352427, "$@spelldesc352108", 0, 0 },
-  {  352429, "Your ranged attacks and abilities have a chance to summon a Mailemental that throws Unstable Goods at your target, dealing $s1 Arcane damage.", 0, 0 },
+  {  352429, "Your ranged attacks and abilities have a chance to summon a Mailemental that throws Unstable Goods at your target, dealing ${$s1*$<rolemult>} Arcane damage.", 0, 0 },
   {  352448, "$@spelldesc352108", "Movement speed is slowed by $M1%.", 0 },
   {  352451, "$@spelldesc352108", "Movement speed is slowed by $M1%.", 0 },
   {  352498, "$@spelldesc351146", "Friends with $@auracaster, granting $w1 Mastery.", 0 },
@@ -17325,7 +17325,7 @@ static constexpr std::array<spelltext_data_t, 28029> __spelltext_data { {
   {  367896, "Grants you $s1 Mastery for $d.", "Mastery increased by $w1.", 0 },
   {  367898, "Increase your attunement to the Shadowlands, learning all Conduits and raising them to item level $s2.", 0, 0 },
   {  367901, "$@spelldesc367902", "$@auradesc367902", 0 },
-  {  367902, "Your melee attacks and abilities have a high chance to attach a Volatile Satchel onto your target. Upon reaching ${$u1+1} stacks, or when removed, the Volatile Satchel detonates and deals $367901s1 Fire damage.", "Upon reaching ${$u1+1} stacks or its removal, the Volatile Satchel detonates for $367901w1 Fire damage.", 0 },
+  {  367902, "Your melee attacks and abilities have a high chance to attach a Volatile Satchel onto your target. Upon reaching ${$u1+1} stacks, or when removed, the Volatile Satchel detonates, inflicting ${$<rolemult>*$367901s1} Fire damage.", "Upon reaching ${$u1+1} stacks or its removal, the Volatile Satchel detonates for $367901w1 Fire damage.", 0 },
   {  367903, "$@spelldesc367902", "$@auradesc367902", 0 },
   {  367907, "$@spelldesc364423", "Generating ${$o1/10} Astral Power over $d.", 0 },
   {  367911, "When Pocopoc possesses a Coreless Tarachnid, it gives you a chance to stun and poison melee attackers.", 0, 0 },
@@ -27949,6 +27949,8 @@ static constexpr std::array<spelltext_data_t, 28029> __spelltext_data { {
   { 1242220, "$@spelldesc383860", "Pyroblast and Flamestrike damage increased by $s1%.", 0 },
   { 1242270, "$@spelldesc322740", 0, 0 },
   { 1242326, "Channel for $1241801s5 sec to invoke the wrath of the idol, increasing your Critical Strike by $1241801s1 for $1241806d. The force slams the earth, dealing $1241801s2 Nature damage to all nearby enemies and increasing Critical Strike by $1241801s3 per enemy hit, up to a maximum of $1241801s4.", 0, 0 },
+  { 1242344, "Manaforge Omega's energy empowers your weapon enchantments, improving their effects by $s1% while inside its walls. Runeforging effects are increased by $s2%.", "Weapon enchantment effects increased by $w1%. Runeforging effects increased by $w2%.", 0 },
+  { 1242345, "$@spelldesc1242344", 0, 0 },
   { 1242347, "Increases $pri by $s1 for $d. Augment Rune. Persists through death.", "$pri increased by $w1. Persists through death.", 0 },
   { 1242352, "Stomps the ground, dealing $s1 Physical damage to all nearby enemies.", 0, 0 },
   { 1242373, "Stomps the ground, dealing $s1 Physical damage to your target. Deals reduced damage to secondary targets.", 0, 0 },
@@ -27967,13 +27969,13 @@ static constexpr std::array<spelltext_data_t, 28029> __spelltext_data { {
   { 1243133, "$@spelldesc1243118", 0, 0 },
   { 1243411, "Strike with the speed of a warpstalker, inflicting ${$<rolemult>*$s1} Spellstrike damage split between enemies within $a1 yds in front of you.", 0, 0 },
   { 1243749, 0, "You now flip on every jump! Yay!", 0 },
-  { 1243818, "Your damaging spells have a chance to attract mites to feast on your target, inflicting up to ${$s1*$1243828d/$1243828t1} Shadow damage over $1243828d. Well-fed mites share their meal with you, increasing your Intellect by $s2 for $1243843d.", 0, 0 },
+  { 1243818, "Your damaging spells have a chance to attract mites to feast on your target, inflicting up to ${$s1*$1243828d/$1243828t1} Shadow damage over $1243828d. Well-fed mites share their meal with you, each increasing your Intellect by $s2 for $1243843d.", 0, 0 },
   { 1243828, "$@spelldesc1243818", "Suffering $w1 Shadow damage every $t1 sec.", 0 },
   { 1243843, "$@spelldesc1243818", "Intellect increased by $w1.", 0 },
   { 1244007, "Taking damage has a chance to siphon chaos energies from the Twisting Nether granting you $s1  Leech for $1246543d1. Dropping below $s3% health will unleash the Harvester immediately granting you $s2 Leech for $1246545d. Can only occur every 120 sec.", 0, 0 },
   { 1244008, "Release the Nethergate, flooding your location with corrupted mana dealing $1246837s1 damage every $1246837s3 sec to enemies inside for $d and Heal for $1246837s2 per target hit up to $1246837s4 targets.\r\n", 0, 0 },
   { 1244029, "Borrow from the fates of those around you, increasing your Mastery by $s1 for $d.", "Mastery increased by $w1.", 0 },
-  { 1244402, "Your spells and ranged abilities critical strikes have a high chance to grant you Arcane Hunter up to 5 times, increasing your Critical Strike rating by $s1 per stack for $1245376d1.", 0, 0 },
+  { 1244402, "Your harmful spells and ranged abilities critical strikes have a high chance to grant you Arcane Hunter up to 5 times, increasing your Critical Strike rating by $s1 per stack for $1245376d1.", 0, 0 },
   { 1244405, "Your healing abilities have a chance to power the Aethercell increasing your Mastery by $s1, decreasing by ${$s1/$1245397d1} each sec. Lasts $1245397d1.\r\n", 0, 0 },
   { 1244406, "Blocking, parrying, or dodging has a chance to awaken the Gauze causing it to lash out dealing $s1 Arcane damage split between nearby enemies while shielding you for $s2 damage for $1245431d.\r\n", 0, 0 },
   { 1244410, "Rip magical essence out of your target and consume it dealing ${$s1*$<rolemult>} Arcane damage while granting you $1247205s1 of your lowest secondary stat for $1247207d.\r\n\r\nIf the target was an Ethereal, your highest secondary stat is increased instead.", 0, 0 },
@@ -28029,15 +28031,21 @@ static constexpr std::array<spelltext_data_t, 28029> __spelltext_data { {
   { 1254904, "The powers of your Reshii Wraps are triggered $s1% more frequently.", 0, 0 },
   { 1254905, "The powers of your Reshii Wraps are triggered $s1% more frequently.", 0, 0 },
   { 1254906, "The powers of your Reshii Wraps are triggered $s1% more frequently.", 0, 0 },
+  { 1257668, "Increase the minimum item level of Manaforge Omega set helm, chestpiece, or leg armor to $s3 in Arenas and Battlegrounds. \r\n\r\nHelms will not become eligible for additional sockets from Astral Jeweler's Settings.", 0, 0 },
+  { 1257669, "Increase the minimum item level of Manaforge Omega set gloves or shoulder armor to $s3 in Arenas and Battlegrounds. ", 0, 0 },
+  { 1257703, "$@spelldesc260240", "Damage of $?a471363[Kill Shot, ][]Arcane Shot or Multi-Shot increased by $s1% and their Focus cost is reduced by $s3%.", 0 },
 } };
 
-// spelltext hotfix entries, wow build 11.2.0.62387
-static constexpr std::array<hotfix::client_hotfix_entry_t, 1> __spelltext_hotfix_data { {
-  {  351531,  0, "Your damaging critical strikes grant you a stack of Preternatural Charge. When you reach $u stacks of Preternatural Charge, your next critical strike will consume all stacks to tear open a rift near your target, inflicting $s1 Arcane damage.", "Your damaging critical strikes grant you a stack of Preternatural Charge. When you reach $u stacks of Preternatural Charge, your next critical strike will consume all stacks to tear open a rift near your target, inflicting $351527s1 Arcane damage." },
+// spelltext hotfix entries, wow build 11.2.0.63003
+static constexpr std::array<hotfix::client_hotfix_entry_t, 4> __spelltext_hotfix_data { {
+  { 1242344,  0, "Manaforge Omega's energy empowers your Mana Oils & Enchantments, improving their effects by 50% while inside its walls.", "Manaforge Omega's energy empowers your weapon enchantments, improving their effects by $s1% while inside its walls. Runeforging effects are increased by $s2%." },
+  { 1242344,  1, "Manaforge Omega's energy empowers your Mana Oils & Enchantments, improving their effects by 50% while inside its walls.", "Weapon enchantment effects increased by $w1%. Runeforging effects increased by $w2%." },
+  { 1242345,  0, "Manaforge Omega's energy empowers your Mana Oils & Enchantments, improving their effects by 50% while inside its walls.", "$@spelldesc1242344" },
+  { 1242345,  1, "Manaforge Omega's energy empowers your Mana Oils & Enchantments, improving their effects by 50% while inside its walls.", nullptr },
 } };
 
-// Spell description variables, wow build 11.2.0.62387
-static constexpr std::array<spelldesc_vars_data_t, 672> __spelldesc_vars_data { {
+// Spell description variables, wow build 11.2.0.63003
+static constexpr std::array<spelldesc_vars_data_t, 674> __spelldesc_vars_data { {
   {      53, "$mult=${($max(0,$min($pl-10,10))*11+260)/370}" },
   {     120, "$arctic1=$?s31674[${1.01}][${1}]\r\n$arctic2=$?s31675[${1.02}][${$<arctic1>}]\r\n$arctic3=$?s31676[${1.03}][${$<arctic2>}]\r\n$arctic4=$?s31677[${1.04}][${$<arctic3>}]\r\n$arctic5=$?s31678[${1.05}][${$<arctic4>}]\r\n$piercing1=$?s11151[${1.02}][${1}]\r\n$piercing2=$?s12952[${1.04}][${$<piercing1>}]\r\n$piercing3=$?s12953[${1.06}][${$<piercing2>}]\r\n$mult=${$<arctic5>*$<piercing3>}" },
   {     122, "$arctic1=$?s31674[${1.01}][${1}]\r\n$arctic2=$?s31675[${1.02}][${$<arctic1>}]\r\n$arctic3=$?s31676[${1.03}][${$<arctic2>}]\r\n$arctic4=$?s31677[${1.04}][${$<arctic3>}]\r\n$arctic5=$?s31678[${1.05}][${$<arctic4>}]\r\n$piercing1=$?s11151[${1.02}][${1}]\r\n$piercing2=$?s12952[${1.04}][${$<piercing1>}]\r\n$piercing3=$?s12953[${1.06}][${$<piercing2>}]\r\n$mult=${$<arctic5>*$<piercing3>}" },
@@ -28392,6 +28400,7 @@ static constexpr std::array<spelldesc_vars_data_t, 672> __spelldesc_vars_data { 
   {  351985, "$images=$?s63093[${$63093m1+$55342m2}][${$55342m2}]" },
   {  352110, "$shield=${$max($SP,$AP)*.1*(1+$@versadmg)}\r\n$mod=$?a137005[${2}]?a212611[${2}]?a137009[${.4}.1]?a137014[${.75}.1]?a137018[${3}]?a137022[${1}]?a137026[${.5}]?a137030[${1.0}]?a137034[${.5}]?a137038[${.75}.1]?a137042[${.75}.1]?a137047[${2}]?a353167[${2}][${1.0}]" },
   {  352188, "$mod=$?a137005[${1}]?a212611[${1}]?a137009[${1}]?a137014[${1}]?a137018[${0.5}]?a137022[${2}]?a137026[${1}]?a137030[${3}]?a137034[${0.75}]?a137038[${1}]?a137042[${0.4}]?a137047[${1}]?a353167[${2}][${1}]\r\n$points=${$353248s2/100*$max($AP,$SP)*(1+$@versadmg)}\r\n$final=${$<mod>*$<points>*($353248d/$353248t1+1)}\r\n$cd=$?a137005[${4}]?a212611[${4}]?a137009[${4}]?a137014[${4}]?a137018[${2}]?a137022[${8}]?a137026[${4}]?a137030[${12}]?a137034[${3}]?a137038[${4}]?a137042[${3}]?a137047[${4}]?a353167[${8}][${4}]" },
+  {  352429, "$rolemult=$?a137048|a137028|a137023|a137010|a212613|a137008|a137039|a137031|a137032|a137029|a137024|a137024|a356810|a137012[${0.66}.2][${1}]" },
   {  352536, "$shield=${$max($SP,$AP)*.1*(1+$@versadmg)}\r\n$mod=$?a137005[${2}]?a212611[${2}]?a137009[${.4}.1]?a137014[${.75}.1]?a137018[${3}]?a137022[${1}]?a137026[${.5}]?a137030[${1.0}]?a137034[${.5}]?a137038[${.75}.1]?a137042[${.75}.1]?a137047[${2}]?a353167[${2}][${1.0}]" },
   {  354541, "$stacks=${2}" },
   {  355936, "$sOneHeal=${2*$355941s1}\r\n$sTwoHeal=${2.25*$355941s1}\r\n$sThreeHeal=${2.5*$355941s1}\r\n$sFourHeal=${2.75*$355941s1}\r\n$sOneDur=${16}\r\n$sTwoDur=${12}\r\n$sThreeDur=${8}\r\n$sFourDur=${4}\r\n$ysera=$?a373835[${1+$373835s1/100}][${1}]\r\n" },
@@ -28419,6 +28428,7 @@ static constexpr std::array<spelldesc_vars_data_t, 672> __spelldesc_vars_data { 
   {  366155, "$cap=${6}" },
   {  367226, "$range=${30}" },
   {  367231, "$dmg=${$359077s2}" },
+  {  367902, "$rolemult=$?a137048|a137028|a137023|a137010|a212613|a137008|a137039|a137031|a137032|a137029|a137024|a137024|a356810|a137012[${0.66}.2][${1}]" },
   {  368495, "$points=${($s2/100*$max($AP,$SP)*(1+$@versadmg))}" },
   {  368847, "$damage=${$369374s1*(1+$369372d/2)}" },
   {  369908, "$max=${6}" },
@@ -28537,7 +28547,7 @@ static constexpr std::array<spelldesc_vars_data_t, 672> __spelldesc_vars_data { 
   {  431443, "$cap=${($SP*2.5)*(1+$@versadmg)}" },
   {  432154, "$penancedamage=${$421543s1>*($421434d/$421434t2)}\r\n$penancehealing=${$421544s1>*($421434d/$421434t2)}" },
   {  433106, "$prot=${($SP*$433106s1/10)*(1+$@versadmg)*(1+$137028s1/100)}\r\n$holy=${($SP*$433106s1/10)*(1+$@versadmg)*(1+$137029s9/100)}\r\n$value=$?a137028[${($SP*$433106s1/10)*(1+$@versadmg)*(1+$137028s1/100)}][${($SP*$433106s1/10)*(1+$@versadmg)*(1+$137029s9/100)}]" },
-  {  434300, "$dmg=${$INT*3.8*(1+$@versadmg)*$pctD}" },
+  {  434300, "$dmg=${$INT*4.75*(1+$@versadmg)*$pctD}" },
   {  435473, "$rolemult=$?a137048|a137028|a137023|a137010|a212613|a137008|a137039|a137031|a137032|a137029|a137024|a137024|a356810|a137012[${0.66}.2][${1}]" },
   {  435475, "$rolemult=$?a137048|a137028|a137023|a137010|a212613|a137008|a137039|a137031|a137032|a137029|a137024|a137024|a356810|a137012[${0.66}.2][${1}]" },
   {  436036, "$flight=$?a375517[${$375517s1/1000}][${0}]\r\n$dura=$?a406380[${6*(1+$406380s2/100)+$<flight>}.1][${6+$<flight>}]" },
@@ -28712,7 +28722,8 @@ static constexpr std::array<spelldesc_vars_data_t, 672> __spelldesc_vars_data { 
   { 1249658, "$CAP=$?$OWB==0[${$AP*0.98}][${($AP+$OAP)*2/3}]--2H, DW" },
 } };
 
-// spelldesc_vars hotfix entries, wow build 11.2.0.62387
-static constexpr std::array<hotfix::client_hotfix_entry_t, 0> __spelldesc_vars_hotfix_data { {
+// spelldesc_vars hotfix entries, wow build 11.2.0.63003
+static constexpr std::array<hotfix::client_hotfix_entry_t, 1> __spelldesc_vars_hotfix_data { {
+  {  434300,  0, "$dmg=${$INT*3.8*(1+$@versadmg)*$pctD}", "$dmg=${$INT*4.75*(1+$@versadmg)*$pctD}" },
 } };
 

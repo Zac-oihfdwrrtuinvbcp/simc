@@ -1411,7 +1411,8 @@ public:
   {
     ab::execute();
 
-    if ( affected_by.sweeping_strikes && p()->talents.arms.collateral_damage.ok() && p()->buff.sweeping_strikes -> up() && ab::num_targets_hit >= 2 )
+    // 388539 is the rend dot for arms.  Collateral damage is not procced from it, but is procced from other background actions like demolish
+    if ( affected_by.sweeping_strikes && p()->talents.arms.collateral_damage.ok() && p()->buff.sweeping_strikes -> up() && ab::num_targets_hit >= 2 && !(ab::data().id() == 388539) )
     {
       p() -> buff.collateral_damage -> trigger();
     }
@@ -1907,6 +1908,16 @@ struct reap_the_storm_t : public warrior_attack_t
     aoe = -1;
     reduced_aoe_targets = p->talents.slayer.reap_the_storm->effectN( 1 ).base_value();
     weapon = &( p->main_hand_weapon );
+  }
+
+  void impact( action_state_t* state ) override
+  {
+    warrior_attack_t::impact( state );
+
+    if ( p()->talents.slayer.overwhelming_blades->ok() && p()->talents.slayer.reap_the_storm->ok() )
+    {
+      td( state->target )->debuffs_overwhelmed->trigger();
+    }
   }
 };
 
@@ -5533,9 +5544,11 @@ struct pummel_t : public warrior_attack_t
 struct raging_blow_attack_t : public warrior_attack_t
 {
   int aoe_targets;
+  action_t* reap_the_storm;
   raging_blow_attack_t( warrior_t* p, const char* name, const spell_data_t* s )
     : warrior_attack_t( name, p, s ),
-    aoe_targets( as<int>( p->spell.whirlwind_buff->effectN( 1 ).base_value() ) )
+    aoe_targets( as<int>( p->spell.whirlwind_buff->effectN( 1 ).base_value() ) ),
+    reap_the_storm( nullptr )
   {
     may_miss = may_dodge = may_parry = may_block = false;
     dual                                         = true;
@@ -5543,6 +5556,28 @@ struct raging_blow_attack_t : public warrior_attack_t
 
     //base_multiplier *= 1.0 + p->talents.cruelty->effectN( 1 ).percent();
     base_aoe_multiplier = p->spell.whirlwind_buff->effectN( 2 ).percent();
+
+    // 85834 is Raging Blow OH
+    if ( s->id() == 85384 && p->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
+    {
+      reap_the_storm = get_action<reap_the_storm_t>( "reap_the_storm_raging_blow", p );
+      reap_the_storm->base_multiplier = p->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 3 ).percent();
+    }
+  }
+
+  void impact ( action_state_t* s ) override
+  {
+    warrior_attack_t::impact( s );
+
+    if ( reap_the_storm && p()->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) && p()->cooldown.reap_the_storm_icd->is_ready() )
+    {
+      auto target_data = td( s->target );
+      if ( rng().roll( p()->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 2 ).percent() * target_data->debuffs_overwhelmed->check() ) )
+      {
+        reap_the_storm->execute_on_target( s->target );
+        p()->cooldown.reap_the_storm_icd->start();
+      }
+    }
   }
 
   int n_targets() const override
@@ -5613,14 +5648,12 @@ struct raging_blow_t : public warrior_attack_t
       rage_gain += p->find_spell( 1216569 )->effectN( 2 ).resource( RESOURCE_RAGE );
     }
 
-    if ( sim->dbc->wowv() >= wowv_t { 11, 2, 0 } )
+    // We add the reap action here purely for the report
+    if ( p->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
     {
-      if ( p->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
-      {
-        reap_the_storm = get_action<reap_the_storm_t>( "reap_the_storm_raging_blow", p );
-        reap_the_storm->base_multiplier = p->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 3 ).percent();
-        add_child( reap_the_storm );
-      }
+      reap_the_storm = get_action<reap_the_storm_t>( "reap_the_storm_raging_blow", p );
+      reap_the_storm->base_multiplier = p->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 3 ).percent();
+      add_child( reap_the_storm );
     }
   }
 
@@ -5628,23 +5661,6 @@ struct raging_blow_t : public warrior_attack_t
   {
     warrior_attack_t::init();
     cooldown->hasted = true;
-  }
-
-  void impact( action_state_t* s ) override
-  {
-    warrior_attack_t::impact( s );
-
-    if ( sim->dbc->wowv() >= wowv_t { 11, 2, 0 } )
-    {
-      if ( p()->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
-      {
-        auto target_data = td( s->target );
-        if ( reap_the_storm && rng().roll( p()->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 2 ).percent() * target_data->debuffs_overwhelmed->check() ) )
-        {
-          reap_the_storm->execute_on_target( s->target );
-        }
-      }
-    }
   }
 
   void execute() override
@@ -5745,15 +5761,40 @@ struct raging_blow_t : public warrior_attack_t
 struct crushing_blow_attack_t : public warrior_attack_t
 {
   int aoe_targets;
+  action_t* reap_the_storm;
   crushing_blow_attack_t( warrior_t* p, const char* name, const spell_data_t* s )
     : warrior_attack_t( name, p, s ),
-    aoe_targets( as<int>( p->spell.whirlwind_buff->effectN( 1 ).base_value() ) )
+    aoe_targets( as<int>( p->spell.whirlwind_buff->effectN( 1 ).base_value() ) ),
+    reap_the_storm( nullptr )
   {
     may_miss = may_dodge = may_parry = may_block = false;
     dual                                         = true;
     background = true;
 
     base_aoe_multiplier = p->spell.whirlwind_buff->effectN( 2 ).percent();
+
+    // 335100 is Crushing Blow OH attack
+    if ( s->id() == 335100 && p->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
+    {
+      reap_the_storm = get_action<reap_the_storm_t>( "reap_the_storm_crushing_blow", p );
+      reap_the_storm->base_multiplier = p->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 3 ).percent();
+      add_child( reap_the_storm );
+    }
+  }
+
+  void impact ( action_state_t* s ) override
+  {
+    warrior_attack_t::impact( s );
+
+    if ( reap_the_storm && p()->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) && p()->cooldown.reap_the_storm_icd->is_ready() )
+    {
+      auto target_data = td( s->target );
+      if ( rng().roll( p()->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 2 ).percent() * target_data->debuffs_overwhelmed->check() ) )
+      {
+        reap_the_storm->execute_on_target( s->target );
+        p()->cooldown.reap_the_storm_icd->start();
+      }
+    }
   }
 
   int n_targets() const override
@@ -5783,7 +5824,6 @@ struct crushing_blow_t : public warrior_attack_t
   crushing_blow_attack_t* mh_attack;
   crushing_blow_attack_t* oh_attack;
   action_t* lightning_strike;
-  action_t* reap_the_storm;
   double cd_reset_chance, wrath_and_fury_reset_chance;
   bool opportunist_up;
   double rage_gain;
@@ -5792,7 +5832,6 @@ struct crushing_blow_t : public warrior_attack_t
       mh_attack( nullptr ),
       oh_attack( nullptr ),
       lightning_strike( nullptr ),
-      reap_the_storm( nullptr ),
       cd_reset_chance( p->spec.crushing_blow->effectN( 1 ).percent() ),
       wrath_and_fury_reset_chance( p->talents.fury.wrath_and_fury->effectN( 1 ).percent() ),
       opportunist_up( false ),
@@ -5825,39 +5864,12 @@ struct crushing_blow_t : public warrior_attack_t
     {
       rage_gain += p->find_spell( 1216569 )->effectN( 2 ).resource( RESOURCE_RAGE );
     }
-
-    if ( sim->dbc->wowv() >= wowv_t { 11, 2, 0 } )
-    {
-      if ( p->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
-      {
-        reap_the_storm = get_action<reap_the_storm_t>( "reap_the_storm_crushing_blow", p );
-        reap_the_storm->base_multiplier = p->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 3 ).percent();
-        add_child( reap_the_storm );
-      }
-    }
   }
 
   void init() override
   {
     warrior_attack_t::init();
     cooldown->hasted = true;
-  }
-
-  void impact( action_state_t* s ) override
-  {
-    warrior_attack_t::impact( s );
-
-    if ( sim->dbc->wowv() >= wowv_t { 11, 2, 0 } )
-    {
-      if ( p()->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
-      {
-        auto target_data = td( s->target );
-        if ( reap_the_storm && rng().roll( p()->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 2 ).percent() * target_data->debuffs_overwhelmed->check() ) )
-        {
-          reap_the_storm->execute_on_target( s->target );
-        }
-      }
-    }
   }
 
   void execute() override
@@ -6243,14 +6255,11 @@ struct overpower_t : public warrior_attack_t
       add_child( dreadnaught );
     }
 
-    if ( sim->dbc->wowv() >= wowv_t { 11, 2, 0 } )
+    if ( p->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
     {
-      if ( p->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
-      {
-        reap_the_storm = get_action<reap_the_storm_t>( "reap_the_storm_overpower", p );
-        reap_the_storm->base_multiplier = p->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 3 ).percent();
-        add_child( reap_the_storm );
-      }
+      reap_the_storm = get_action<reap_the_storm_t>( "reap_the_storm_overpower", p );
+      reap_the_storm->base_multiplier = p->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 3 ).percent();
+      add_child( reap_the_storm );
     }
   }
 
@@ -6258,20 +6267,19 @@ struct overpower_t : public warrior_attack_t
   {
     warrior_attack_t::impact( s );
 
+    // Dreadnaught fires off per target hit by overpower.  SS will cause casts
     if ( dreadnaught && result_is_hit( s->result ) )
     {
       dreadnaught->execute_on_target( s->target );
     }
 
-    if ( sim->dbc->wowv() >= wowv_t { 11, 2, 0 } )
+    if ( reap_the_storm && p()->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) && p()->cooldown.reap_the_storm_icd->is_ready() )
     {
-      if ( p()->sets->has_set_bonus( HERO_SLAYER, TWW3, B4 ) )
+      auto target_data = td( s->target );
+      if ( rng().roll( p()->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 2 ).percent() * target_data->debuffs_overwhelmed->check() ) )
       {
-        auto target_data = td( s->target );
-        if ( reap_the_storm && rng().roll( p()->sets->set( HERO_SLAYER, TWW3, B4 )->effectN( 2 ).percent() * target_data->debuffs_overwhelmed->check() ) )
-        {
-          reap_the_storm->execute_on_target( s->target );
-        }
+        reap_the_storm->execute_on_target( s->target );
+        p()->cooldown.reap_the_storm_icd->start();
       }
     }
   }
@@ -11072,6 +11080,10 @@ void warrior_t::apply_affecting_auras( action_t& action )
   }
   if ( sim->dbc->wowv() >= wowv_t{ 11, 2, 0 } )
   {
+    // Thane 2pc effect 3 applies only to protection
+    if ( sets->has_set_bonus( HERO_MOUNTAIN_THANE, TWW3, B2 ) && specialization() == WARRIOR_PROTECTION )
+      action.apply_affecting_aura( sets->set( HERO_MOUNTAIN_THANE, TWW3, B2 ) );
+
     if ( sets->has_set_bonus( HERO_MOUNTAIN_THANE, TWW3, B4 ) )
       action.apply_affecting_aura( sets->set( HERO_MOUNTAIN_THANE, TWW3, B4 ) );
   }

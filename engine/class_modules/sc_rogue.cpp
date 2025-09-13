@@ -1087,7 +1087,7 @@ public:
       player_talent_t fate_intertwined;
 
       player_talent_t delivered_doom;
-      player_talent_t inevitabile_end;
+      player_talent_t inevitable_end;
       player_talent_t destiny_defined;  // TODO: Outlaw also gets the poison proc rate the text says is for assa? Verify in-game.
       player_talent_t double_jeopardy;  // TODO: Double jeopardy + edge case stealth break overlap bug
 
@@ -1711,7 +1711,8 @@ public:
     bool ghostly_strike = false;
     bool goremaws_bite = false;         // Cost Reduction
     bool improved_ambush = false;
-    bool improved_shiv = false;
+    bool improved_shiv = false;         // Normal whitelists for Shiv
+    bool improved_shiv_label = false;   // Label whitelist for Shiv
     bool lethal_dose = false;
     bool maim_mangle = false;           // Renamed Systemic Failure for DF talent
     bool master_assassin = false;
@@ -1859,10 +1860,11 @@ public:
     affected_by.blindside = ab::data().affected_by( p->spec.blindside_buff->effectN( 1 ) );
     affected_by.master_assassin = ab::data().affected_by( p->spec.master_assassin_buff->effectN( 1 ) );
 
-    affected_by.improved_shiv =
+    affected_by.improved_shiv_label = p->talent.assassination.improved_shiv->ok() &&
+      ab::data().affected_by_label( p->spec.improved_shiv_debuff->effectN( 4 ) );
+    affected_by.improved_shiv = affected_by.improved_shiv_label ||
       ( p->talent.assassination.improved_shiv->ok() && ab::data().affected_by( p->spec.improved_shiv_debuff->effectN( 1 ) ) ) ||
-      ( ( p->talent.assassination.arterial_precision->ok() && ab::data().affected_by( p->spec.improved_shiv_debuff->effectN( 3 ) ) ) ||
-        ab::data().affected_by_label( p->spec.improved_shiv_debuff->effectN( 4 ) ) );
+      ( p->talent.assassination.arterial_precision->ok() && ab::data().affected_by( p->spec.improved_shiv_debuff->effectN( 3 ) ) );
 
     if ( p->talent.assassination.systemic_failure->ok() )
     {
@@ -2086,7 +2088,7 @@ public:
                                                     ab::data().id() != p()->spell.coup_de_grace->id() &&
                                                     ( secondary_trigger_type != secondary_trigger::COUP_DE_GRACE ||
                                                       ab::data().id() == p()->spell.coup_de_grace_damage_3->id() ) ),
-                           cold_blood_consumed_proc, 0_s, false, p()->talent.fatebound.inevitabile_end->ok() );
+                           cold_blood_consumed_proc, 0_s, false, p()->talent.fatebound.inevitable_end->ok() );
     register_consume_buff( p()->buffs.deathstalkers_mark, p()->buffs.deathstalkers_mark->is_affecting( &ab::data() ),
                            nullptr, 1_ms, true ); // Works with WM
     register_consume_buff( p()->buffs.goremaws_bite, affected_by.goremaws_bite );
@@ -3734,6 +3736,11 @@ struct adrenaline_rush_t : public rogue_spell_t
       p()->cooldowns.adrenaline_rush->adjust( -precombat_seconds, false );
       p()->buffs.adrenaline_rush->extend_duration( p(), -precombat_seconds );
       p()->buffs.loaded_dice->extend_duration( p(), -precombat_seconds );
+      // 2025-08-12 -- Precombat Adrenaline Rush does not trigger Double Jeopardy
+      if ( p()->bugs )
+      {
+        p()->buffs.double_jeopardy->cancel();
+      }
     }
 
     trigger_fatebound_edge_case( execute_state );
@@ -5121,7 +5128,15 @@ struct killing_spree_t : public rogue_attack_t
 
   timespan_t composite_dot_duration( const action_state_t* s ) const override
   {
-    return tick_time( s ) * cast_state( s )->get_combo_points();
+    auto rs = cast_state( s );
+    int trigger_cp = rs->get_combo_points();
+
+    // 2025-09-01 -- If Killing Spree consumes Supercharger, its duration loses an effective combo point
+    //               So with Forced Induction, the duration is treated as +2 CPs as opposed to +3
+    if ( p()->bugs && trigger_cp > rs->get_combo_points( true ) )
+      trigger_cp -= 1;
+
+    return tick_time( s ) * trigger_cp;
   }
 
   void execute() override
@@ -6785,6 +6800,7 @@ struct caustic_spatter_t : public rogue_attack_t
   {
     aoe = -1;
     reduced_aoe_targets = p->spec.caustic_spatter_buff->effectN( 2 ).base_value();
+    affected_by.improved_shiv = true; // 2025-08-10 -- Not in any whitelists but logs show it working on secondary targets
   }
 
   void init() override
@@ -7191,6 +7207,19 @@ struct singular_focus_t : public rogue_attack_t
     callbacks = false;
   }
 
+  void snapshot_internal( action_state_t* s, unsigned flags, result_amount_type rt ) override
+  {
+    rogue_attack_t::snapshot_internal( s, flags, rt );
+
+    // 2025-08-11 -- Ignore Damage Taken Modifiers (136) does not appear to keep Shiv from working on this
+    // Could be due to the use of Label-based modifiers, or could simply be scripted. Unknown currently.
+    if ( p()->bugs && affected_by.improved_shiv_label )
+    {
+      assert( !( flags & STATE_TGT_MUL_DA ) );
+      s->target_da_multiplier = td( s->target )->debuffs.shiv->value_direct();
+    }
+  }
+
   bool procs_shadow_blades_damage() const override
   { return false; }
 
@@ -7323,6 +7352,7 @@ struct nimble_flurry_t : public rogue_attack_t
     rogue_attack_t( name, p, p->spell.nimble_flurry_damage )
   {
     aoe = as<int>( p->talent.trickster.nimble_flurry->effectN( 2 ).base_value() );
+    affected_by.fazed_damage = true; // 2025-08-11 -- Not in whitelist or spell data
   }
 
   size_t available_targets( std::vector< player_t* >& tl ) const override
@@ -9138,7 +9168,7 @@ void actions::rogue_action_t<Base>::trigger_hand_of_fate( const action_state_t* 
   {
     result = p()->rng().roll( 0.5 ) ? fatebound_t::coinflip_e::HEADS : fatebound_t::coinflip_e::TAILS;
   }
-  else if ( p()->buffs.fatebound_coin_heads->check() && p()->buffs.fatebound_coin_tails->check() && trigger_inevitable && p()->talent.fatebound.inevitabile_end->ok() )
+  else if ( p()->buffs.fatebound_coin_heads->check() && p()->buffs.fatebound_coin_tails->check() && trigger_inevitable && p()->talent.fatebound.inevitable_end->ok() )
   {
     // Inevitable flip matching a previous edge case
     result = fatebound_t::coinflip_e::EDGE;
@@ -9147,7 +9177,7 @@ void actions::rogue_action_t<Base>::trigger_hand_of_fate( const action_state_t* 
   else
   {
     double matching_odds = 0.5;
-    if ( trigger_inevitable && p()->talent.fatebound.inevitabile_end->ok() )
+    if ( trigger_inevitable && p()->talent.fatebound.inevitable_end->ok() )
     {
       matching_odds = 1.0;
     }
@@ -9194,16 +9224,22 @@ void actions::rogue_action_t<Base>::execute_fatebound_coinflip( const action_sta
   }
   if ( result == fatebound_t::coinflip_e::TAILS || result == fatebound_t::coinflip_e::EDGE )
   {
+    // Don't fling tails coins at enemies precombat, since that'll start combat (assume the player knows not to have an enemy targeted)
     if ( !ab::is_precombat )
     {
-      // Don't fling tails coins at enemies precombat, since that'll start combat (assume the player knows not to have an enemy targeted)
-      p()->active.fatebound.fatebound_coin_tails->trigger_secondary_action( state->target );
+      auto coin_target = state->target->is_enemy() ? state->target : p()->target;
+      p()->active.fatebound.fatebound_coin_tails->trigger_secondary_action( coin_target );
     }
     p()->buffs.fatebound_coin_tails->increment();
     if ( result != fatebound_t::coinflip_e::EDGE )
     {
       p()->buffs.fatebound_coin_heads->expire();
     }
+  }
+  // If the result is not an edge case, cancel Double Jeopardy if it has been artificially extended from the bug below.
+  if ( p()->bugs && p()->buffs.double_jeopardy->expiration_delay && result != fatebound_t::coinflip_e::EDGE )
+  {
+    p()->buffs.double_jeopardy->cancel();
   }
 }
 
@@ -9217,7 +9253,11 @@ void actions::rogue_action_t<Base>::trigger_fatebound_edge_case( const action_st
   
   if ( p()->talent.fatebound.double_jeopardy->ok() && p()->buffs.double_jeopardy->check() )
   {
-    p()->buffs.double_jeopardy->expire();
+    // 2025-08-12 -- Double Jeopardy does not expire instantly, so multiple edge cases at the same moment can benefit from it.
+    //               It seems multiple edge cases at the same time will always successfully benefit from Double Jeopardy, but mixing
+    //               an edge case with a normal coinflip produces unreliable or unusual results. This mixing of edge cases and 
+    //               normal coinflips is currently not modeled.
+    p()->buffs.double_jeopardy->expire( p()->bugs ? 1_ms : 0_ms );
     execute_fatebound_coinflip( state, fatebound_t::coinflip_e::EDGE );
   }
 
@@ -10521,6 +10561,12 @@ std::unique_ptr<expr_t> rogue_t::create_action_expression( action_t& action, std
         return buffs.envenom->expiration[ buff_idx - 1 ]->occurs() - sim->current_time();
     } );
   }
+  
+  // Temp backwards compatibility fix for PTR typo
+  if ( util::str_compare_ci( name_str, "talent.inevitabile_end" ) || util::str_compare_ci( name_str, "talent.inevitable_end" ) )
+  {
+    return expr_t::create_constant( name_str, talent.fatebound.inevitable_end.enabled() );
+  }
 
   return player_t::create_action_expression( action, name_str );
 }
@@ -10688,11 +10734,12 @@ std::unique_ptr<expr_t> rogue_t::create_expression( util::string_view name_str )
       if ( split.size() == 3 )
       {
         util::string_view buff_name = split[ 2 ];
-        auto it = range::find_if( primary->buffs, [buff_name]( const buff_t* buff ) {
-          return util::str_compare_ci( buff->name_str, buff_name ); } );
+        auto it = range::find_if( primary->buffs, [ buff_name ]( const buff_t* buff ) {
+          return util::str_compare_ci( buff->name_str, buff_name );
+        } );
 
         if ( it == primary->buffs.end() )
-          throw std::invalid_argument( fmt::format( "Invalid rtb_buffs.{} buff name given '{}'.", split[ 1 ], buff_name ) );
+          throw sc_invalid_apl_argument( fmt::format( "Invalid buff in 'rtb_buffs.{}.{}'.", split[ 1 ], buff_name ) );
         else
           filter_buff = ( *it );
       }
@@ -11391,7 +11438,7 @@ void rogue_t::init_spells()
   talent.fatebound.fate_intertwined = find_talent_spell( talent_tree::HERO, "Fate Intertwined" );
 
   talent.fatebound.delivered_doom = find_talent_spell( talent_tree::HERO, "Delivered Doom" );
-  talent.fatebound.inevitabile_end = find_talent_spell( talent_tree::HERO, "Inevitabile End" );
+  talent.fatebound.inevitable_end = find_talent_spell( talent_tree::HERO, is_ptr() ? "Inevitable End" : "Inevitabile End" );
   talent.fatebound.destiny_defined = find_talent_spell( talent_tree::HERO, "Destiny Defined" );
   talent.fatebound.double_jeopardy = find_talent_spell( talent_tree::HERO, "Double Jeopardy" );
 
@@ -11430,7 +11477,7 @@ void rogue_t::init_spells()
   spell.thistle_tea = talent.rogue.thistle_tea->ok() ? talent.rogue.thistle_tea->effectN( 1 ).trigger() : spell_data_t::not_found();
   spell.thistle_tea_buff = talent.rogue.thistle_tea->ok() ? find_spell( 381623 ) : spell_data_t::not_found();
   spell.vanish_buff = spell.vanish->ok() ? find_spell( 11327 ) : spell_data_t::not_found();
-  spell.cold_blood = talent.rogue.cold_blood->ok() ? talent.fatebound.inevitabile_end->ok() ? find_spell( 456330 ) : find_spell( 382245 ) : spell_data_t::not_found();
+  spell.cold_blood = talent.rogue.cold_blood->ok() ? talent.fatebound.inevitable_end->ok() ? find_spell( 456330 ) : find_spell( 382245 ) : spell_data_t::not_found();
 
   // Hero Talent Background Spells
   // Deathstalker
@@ -11483,7 +11530,7 @@ void rogue_t::init_spells()
   spec.dashing_scoundrel = talent.assassination.dashing_scoundrel->ok() ? talent.assassination.dashing_scoundrel : spell_data_t::not_found();
   spec.dashing_scoundrel_gain = talent.assassination.dashing_scoundrel->ok() ? talent.assassination.dashing_scoundrel->effectN( 2 ).resource( RESOURCE_ENERGY ) : 0.0;
   spec.deadly_poison_instant = talent.assassination.deadly_poison->ok() ? find_spell( 113780 ) : spell_data_t::not_found();
-  spec.doomblade_debuff = talent.assassination.doomblade->ok() ? find_spell( 381672 ) : spell_data_t::not_found();
+  spec.doomblade_debuff = talent.assassination.doomblade->ok() ? find_spell( 394021 ) : spell_data_t::not_found();
   spec.improved_garrote_buff = talent.assassination.improved_garrote->ok() ? find_spell( 392401 ) : spell_data_t::not_found();
   spec.improved_shiv_debuff = ( talent.assassination.improved_shiv->ok() || talent.assassination.arterial_precision->ok() ) ? find_spell( 319504 ) : spell_data_t::not_found();
   spec.indiscriminate_carnage_buff = talent.assassination.indiscriminate_carnage->ok() ? find_spell( 385747 ) : spell_data_t::not_found();
@@ -12591,7 +12638,7 @@ static bool parse_fixed_rtb( sim_t* sim, util::string_view /* name */, util::str
   std::vector<size_t> buffs;
   for ( auto it = value.begin(); it < value.end(); ++it )
   {
-    if ( *it < '1' or *it > '6' )
+    if ( *it < '1' || *it > '6' )
     {
       continue;
     }
@@ -12926,7 +12973,7 @@ void rogue_t::init_special_effects()
         if ( !rogue->active.deathstalker.singular_focus )
           return;
 
-        rogue->active.deathstalker.singular_focus->trigger_residual_action( s, multiplier, true, true, debuff->player );
+        rogue->active.deathstalker.singular_focus->trigger_residual_action( s, multiplier, false, false, debuff->player );
       }
     };
 
