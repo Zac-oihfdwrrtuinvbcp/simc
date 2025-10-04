@@ -1807,8 +1807,6 @@ public:
   void init_spells() override;
   void init_action_list() override;
   void init_blizzard_action_list() override;
-  void parse_assisted_combat_step( const assisted_combat_step_data_t& step,
-                                   action_priority_list_t* assisted_combat ) override;
   parsed_assisted_combat_rule_t parse_assisted_combat_rule( const assisted_combat_rule_data_t& rule,
                                                             const assisted_combat_step_data_t& step ) const override;
   std::vector<std::string> action_names_from_spell_id( unsigned int spell_id ) const override;
@@ -1854,6 +1852,8 @@ public:
   void datacollection_begin() override;
   void datacollection_end() override;
   void analyze( sim_t& sim ) override;
+  void apply_action_effects( action_t* a, bool pet = false );
+  void apply_target_action_effects( action_t* a, bool pet = false );
   void apply_affecting_auras( buff_t& );
   void apply_affecting_auras( action_t& action ) override;
 
@@ -1898,7 +1898,6 @@ public:
   double tick_damage_over_time( timespan_t duration, const dot_t* dot ) const;
   double psuedo_random_p_from_c( double c );
   double pseudo_random_c_from_p( double p );
-  std::string blizzard_apl_action_replace( std::string options );
   // Rider of the Apocalypse
   int get_random_rider();
   void summon_rider( timespan_t duration, bool random );
@@ -2787,19 +2786,23 @@ struct pet_action_t : public parse_action_effects_t<Base>
   pet_action_t( T_PET* p, std::string_view name, const spell_data_t* spell = spell_data_t::nil() )
     : action_base_t( name, p, spell )
   {
-    this->special = this->may_crit = true;
+    this->special = true;
+
+    if ( !this->data().flags( spell_attribute::SX_CANNOT_CRIT ) && this->harmful )
+      this->may_crit = true;
+
+    if ( this->data().flags( spell_attribute::SX_TICK_MAY_CRIT ) )
+      this->tick_may_crit = true;
+
     if ( this->data().ok() )
     {
-      apply_pet_action_effects();
+      dk()->apply_action_effects( this, true );
       if ( this->type == action_e::ACTION_SPELL || this->type == action_e::ACTION_ATTACK )
       {
-        apply_pet_target_effects();
+        dk()->apply_target_action_effects( this, true );
       }
     }
   }
-
-  void apply_pet_action_effects();
-  void apply_pet_target_effects();
 
   template <typename... Ts>
   void parse_effects( Ts&&... args )
@@ -3234,7 +3237,7 @@ struct ghoul_pet_t final : public base_ghoul_pet_t
         m *= 1.0 + ghoulish_frenzy->check_value();
 
       if ( blood_rush->check() )
-        m *= 1.0 + blood_rush->check_value();
+        m *= 1.0 + blood_rush->check_stack_value();
     }
 
     return m;
@@ -3438,6 +3441,11 @@ struct gargoyle_pet_t : public death_knight_pet_t
     {
       dk()->buffs.unholy_commander->trigger();
     }
+  }
+
+  void init_finished() override   {
+    death_knight_pet_t::init_finished();
+    buffs.stunned->set_expire_callback( [ this ]( buff_t*, int, timespan_t d ) { reschedule_gargoyle(); } );
   }
 
   void init_base_stats() override
@@ -3828,6 +3836,7 @@ struct dancing_rune_weapon_pet_t : public death_knight_pet_t
       : drw_action_t<melee_attack_t>( p, n, p->dk()->spell.vampiric_strike )
     {
       attack_power_mod.direct = data().effectN( 5 ).ap_coeff();
+      aoe = 1;
     }
   };
 
@@ -3946,7 +3955,7 @@ struct dancing_rune_weapon_pet_t : public death_knight_pet_t
     double m = death_knight_pet_t::composite_player_multiplier( school );
 
     if ( blood_rush->check() )
-      m *= 1.0 + blood_rush->check_value();
+      m *= 1.0 + blood_rush->check_stack_value();
 
     return m;
   }
@@ -4206,7 +4215,7 @@ struct blood_beast_pet_t : public death_knight_pet_t
     main_hand_weapon.type       = WEAPON_BEAST;
     main_hand_weapon.swing_time = 1_s;
     npc_id                      = owner->find_spell( 434237 )->effectN( 1 ).misc_value1();
-    owner_coeff.ap_from_ap      = 0.5565;
+    owner_coeff.ap_from_ap      = 0.775;
     resource_regeneration       = regen_type::DISABLED;
     blood_beast_mod             = dk()->specialization() == DEATH_KNIGHT_BLOOD
                                       ? dk()->talent.sanlayn.the_blood_is_life->effectN( 1 ).percent()
@@ -4300,7 +4309,6 @@ struct horseman_pet_t : public death_knight_pet_t
     {
       parse_options( options_str );
       trigger_gcd = 1_s;
-      gcd_type    = gcd_haste_type::ATTACK_HASTE;  // spell is type melee
       harmful     = false;
     }
 
@@ -5014,10 +5022,13 @@ struct death_knight_action_t : public parse_action_effects_t<Base>
   using base_t        = death_knight_action_t<Base>;
 
   propagate_const<gain_t*> gain;
-  bool hasted_gcd;
   double rp_per_tick;
   std::vector<player_effect_t> runic_power_multiplier_effects;
   std::vector<player_effect_t> runic_power_flat_effects;
+
+  action_t* replacement_action;
+  buff_t* replacement_action_buff;
+  bool always_replace;
 
   struct
   {
@@ -5026,8 +5037,12 @@ struct death_knight_action_t : public parse_action_effects_t<Base>
   death_knight_action_t( std::string_view n, death_knight_t* p, const spell_data_t* s = spell_data_t::nil() )
     : action_base_t( n, p, s ),
       gain( nullptr ),
-      hasted_gcd( false ),
       rp_per_tick( 0 ),
+      runic_power_multiplier_effects(),
+      runic_power_flat_effects(),
+      replacement_action( nullptr ),
+      replacement_action_buff( nullptr ),
+      always_replace( false ),
       affected_by{}
   {
     this->may_glance = false;
@@ -5078,11 +5093,11 @@ struct death_knight_action_t : public parse_action_effects_t<Base>
 
     if ( this->data().ok() )
     {
-      apply_action_effects();
+      p->apply_action_effects( this );
 
       if ( this->type == action_e::ACTION_SPELL || this->type == action_e::ACTION_ATTACK )
       {
-        apply_target_effects();
+        p->apply_target_action_effects( this );
       }
 
       if ( this->data().flags( spell_attribute::SX_ABILITY ) || this->trigger_gcd > 0_ms )
@@ -5240,8 +5255,58 @@ struct death_knight_action_t : public parse_action_effects_t<Base>
     return m;
   }
 
-  void apply_action_effects();
-  void apply_target_effects();
+  void set_replacement_action( action_t* a, buff_t* buff = nullptr )
+  {
+    if ( !a )
+    {
+      p()->sim->errorf( "%s Attempting to set null replacement action for %s. Ignoring.\n", p()->name(), full_name().c_str() );
+      return;
+    }
+
+    this->replacement_action = a;
+
+    if ( buff )
+    {
+      this->replacement_action_buff = buff;
+      this->add_child( a );
+    }
+    else
+      this->always_replace = true;
+  }
+
+  void set_replacement_action( int id, buff_t* buff = nullptr )
+  {
+    action_t* a = find_action_by_id( id );
+    if ( !a )
+    {
+      p()->sim->errorf( "%s Attempting to set replacement action by id %d for %s, but no such action exists. Ignoring.\n", p()->name(), id,
+                   full_name().c_str() );
+      return;
+    }
+    set_replacement_action( a, buff );
+  }
+
+  void set_replacement_action( std::string_view name, buff_t* buff = nullptr )
+  {
+    action_t* a = p()->find_action( name );
+    if ( !a )
+    {
+      p()->sim->errorf( "%s Attempting to set replacement action by name '%s' for %s, but no such action exists. Ignoring.\n",
+                   p()->name(), name.data(), full_name().c_str());
+      return;
+    }
+    set_replacement_action( a, buff );
+  }
+
+  action_t* find_action_by_id( int id )
+  {
+    for ( auto& a : p()->action_list )
+    {
+      if ( a->data().id() == id )
+        return a.get();
+    }
+    return nullptr;
+  }
 
   template <typename... Ts>
   void parse_effects( Ts&&... args )
@@ -5292,11 +5357,6 @@ struct death_knight_action_t : public parse_action_effects_t<Base>
       return 0_ms;
     }
 
-    if ( hasted_gcd )
-    {
-      base_gcd *= this->composite_haste();
-    }
-
     if ( base_gcd < this->min_gcd )
     {
       base_gcd = this->min_gcd;
@@ -5315,8 +5375,33 @@ struct death_knight_action_t : public parse_action_effects_t<Base>
     }
   }
 
+  bool ready() override
+  {
+    if ( !this->replacement_action )
+      return action_base_t::ready();
+
+    if ( this->always_replace || ( this->replacement_action_buff && this->replacement_action_buff->check() ) )
+      return this->replacement_action->ready();
+    else
+      return action_base_t::ready();
+  }
+
   void execute() override
   {
+    if ( this->replacement_action )
+    {
+      if ( this->always_replace || ( this->replacement_action_buff && this->replacement_action_buff->check() ) )
+      {
+        this->replacement_action->set_target( this->target );
+        this->replacement_action->execute();
+
+        if ( !this->always_replace )
+          this->stats->add_execute( 0_ms, this->target );
+
+        return;
+      }
+    }
+
     action_base_t::execute();
     // For non tank DK's, we proc the ability on CD, attached to thier own executes, to simulate it
     if ( p()->talent.blood_draw.ok() && p()->specialization() != DEATH_KNIGHT_BLOOD &&
@@ -6497,8 +6582,8 @@ struct melee_t : public death_knight_melee_attack_t
                    p->talent.frost.icy_death_torrent->proc_chance();
     }
 
-    apply_action_effects();
-    apply_target_effects();
+    p->apply_action_effects( this );
+    p->apply_target_action_effects( this );
 
     // Dual wielders have a -19% chance to hit on melee attacks
     if ( p->dual_wield() )
@@ -9235,41 +9320,12 @@ struct festering_scythe_t final : public festering_base_t
 struct festering_strike_t final : public festering_base_t
 {
   festering_strike_t( death_knight_t* p, std::string_view options_str )
-    : festering_base_t( "festering_strike", p, p->talent.unholy.festering_strike ),
-      festering_scythe( nullptr ),
-      festering_scythe_cost( 0 )
+    : festering_base_t( "festering_strike", p, p->talent.unholy.festering_strike )
   {
     parse_options( options_str );
     if ( p->talent.unholy.festering_scythe.ok() )
-    {
-      festering_scythe      = new festering_scythe_t( p );
-      festering_scythe_cost = festering_scythe->data().cost( POWER_RUNE );
-      add_child( festering_scythe );
-    }
+      set_replacement_action( new festering_scythe_t( p ), p->buffs.festering_scythe );
   }
-
-  double cost() const override
-  {
-    if ( p()->talent.unholy.festering_scythe.ok() && p()->buffs.festering_scythe->check() )
-      return festering_scythe_cost;
-
-    return base_costs[ RESOURCE_RUNE ];
-  }
-
-  void execute() override
-  {
-    if ( p()->talent.unholy.festering_scythe.ok() && p()->buffs.festering_scythe->check() )
-    {
-      festering_scythe->execute_on_target( target );
-      stats->add_execute( 0_ms, target );
-      return;
-    }
-    festering_base_t::execute();
-  }
-
-private:
-  festering_scythe_t* festering_scythe;
-  double festering_scythe_cost;
 };
 
 // Frostscythe ==============================================================
@@ -11085,10 +11141,10 @@ struct vampiric_strike_unholy_t : public wound_spender_base_t
   {
     attack_power_mod.direct = data().effectN( 1 ).ap_coeff();
     energize_amount         = std::fabs( data().powerN( 3 ).cost() );
+
     if ( p->talent.sanlayn.infliction_of_sorrow.ok() )
-    {
       add_child( p->background_actions.infliction_of_sorrow );
-    }
+
     if ( p->talent.sanlayn.the_blood_is_life.ok() )
     {
       p->pets.blood_beast.set_creation_event_callback( pets::parent_pet_action_fn( this ) );
@@ -11100,45 +11156,13 @@ struct vampiric_strike_unholy_t : public wound_spender_base_t
 struct clawing_shadows_t final : public wound_spender_base_t
 {
   clawing_shadows_t( std::string_view n, death_knight_t* p, std::string_view options_str )
-    : wound_spender_base_t( n, p, p->talent.unholy.clawing_shadows ),
-      vampiric_strike( nullptr ),
-      vampiric_strike_cost( 0 )
+    : wound_spender_base_t( n, p, p->talent.unholy.clawing_shadows )
   {
     parse_options( options_str );
+
     if ( p->talent.sanlayn.vampiric_strike.ok() )
-    {
-      vampiric_strike      = new vampiric_strike_unholy_t( "vampiric_strike", p );
-      vampiric_strike_cost = p->spell.vampiric_strike->cost( POWER_RUNE );
-      add_child( vampiric_strike );
-    }
+      set_replacement_action( new vampiric_strike_unholy_t( "vampiric_strike", p ), p->buffs.vampiric_strike );
   }
-
-  double cost() const override
-  {
-    if ( p()->talent.sanlayn.vampiric_strike.ok() && p()->buffs.vampiric_strike->check() )
-    {
-      return vampiric_strike_cost;
-    }
-    else
-    {
-      return base_costs[ RESOURCE_RUNE ];
-    }
-  }
-
-  void execute() override
-  {
-    if ( p()->talent.sanlayn.vampiric_strike.ok() && p()->buffs.vampiric_strike->check() )
-    {
-      vampiric_strike->execute_on_target( target );
-      stats->add_execute( 0_ms, target );
-      return;
-    }
-    wound_spender_base_t::execute();
-  }
-
-private:
-  vampiric_strike_unholy_t* vampiric_strike;
-  double vampiric_strike_cost;
 };
 
 struct scourge_strike_shadow_t final : public death_knight_melee_attack_t
@@ -11168,52 +11192,24 @@ struct scourge_strike_shadow_t final : public death_knight_melee_attack_t
 struct scourge_strike_t final : public wound_spender_base_t
 {
   scourge_strike_t( std::string_view n, death_knight_t* p, std::string_view options_str )
-    : wound_spender_base_t( n, p, p->talent.unholy.scourge_strike ),
-      vampiric_strike( nullptr ),
-      vampiric_strike_cost( 0 )
+    : wound_spender_base_t( n, p, p->talent.unholy.scourge_strike )
   {
     parse_options( options_str );
     impact_action = get_action<scourge_strike_shadow_t>( "scourge_strike_shadow", p );
     add_child( impact_action );
-    if ( p->talent.unholy.clawing_shadows.ok() )
-    {
-      background = true;  // Prevent executing this through the APL with Clawing Shadows talented
-    }
-    if ( p->talent.sanlayn.vampiric_strike.ok() && !p->talent.unholy.clawing_shadows.ok() )
-    {
-      vampiric_strike      = new vampiric_strike_unholy_t( "vampiric_strike", p );
-      vampiric_strike_cost = p->spell.vampiric_strike->cost( POWER_RUNE );
-      add_child( vampiric_strike );
-    }
-  }
 
-  double cost() const override
-  {
-    if ( p()->talent.sanlayn.vampiric_strike.ok() && p()->buffs.vampiric_strike->check() )
-    {
-      return vampiric_strike_cost;
-    }
-    else
-    {
-      return base_costs[ RESOURCE_RUNE ];
-    }
+    if ( p->talent.unholy.clawing_shadows.ok() )
+      set_replacement_action( new clawing_shadows_t( "clawing_shadows", p, options_str ) );
+
+    if ( p->talent.sanlayn.vampiric_strike.ok() && !p->talent.unholy.clawing_shadows.ok() )
+      set_replacement_action( new vampiric_strike_unholy_t( "vampiric_strike", p ), p->buffs.vampiric_strike );
   }
 
   void execute() override
   {
-    if ( p()->talent.sanlayn.vampiric_strike.ok() && p()->buffs.vampiric_strike->check() )
-    {
-      vampiric_strike->execute_on_target( target );
-      stats->add_execute( 0_ms, target );
-      return;
-    }
     wound_spender_base_t::execute();
     p()->trigger_sanlayn_execute_talents( false );
   }
-
-private:
-  vampiric_strike_unholy_t* vampiric_strike;
-  double vampiric_strike_cost;
 };
 
 // Soul Reaper ==============================================================
@@ -13539,8 +13535,6 @@ action_t* death_knight_t::create_action( std::string_view name, std::string_view
     return new army_of_the_dead_t( this, options_str );
   if ( name == "apocalypse" )
     return new apocalypse_t( this, options_str );
-  if ( name == "clawing_shadows" )
-    return new clawing_shadows_t( name, this, options_str );
   if ( name == "dark_transformation" )
     return new dark_transformation_t( name, this, options_str );
   if ( name == "death_and_decay" )
@@ -13580,10 +13574,6 @@ action_t* death_knight_t::create_action( std::string_view name, std::string_view
     }
     return create_action( "death_and_decay", options_str );
   }
-
-  // wound_spender will return clawing shadows if talented, scourge strike if it's not
-  if ( name == "wound_spender" )
-    return create_action( talent.unholy.clawing_shadows.ok() ? "clawing_shadows" : "scourge_strike", options_str );
 
   return player_t::create_action( name, options_str );
 }
@@ -14670,64 +14660,6 @@ parsed_assisted_combat_rule_t death_knight_t::parse_assisted_combat_rule(
   return player_t::parse_assisted_combat_rule( rule, step );
 }
 
-// death_knight_t::blizzard_apl_action_replace ================================
-std::string death_knight_t::blizzard_apl_action_replace( std::string options )
-{
-  switch ( specialization() )
-  {
-    case DEATH_KNIGHT_BLOOD:
-      break;
-    case DEATH_KNIGHT_FROST:
-      break;
-    case DEATH_KNIGHT_UNHOLY:
-      if ( options.find( "talent.clawing_shadows" ) != std::string::npos )
-        return "clawing_shadows";
-      break;
-    default:
-      break;
-  }
-
-  return "";
-}
-
-// death_knight_t::parse_assisted_combat_step ===============================
-void death_knight_t::parse_assisted_combat_step( const assisted_combat_step_data_t& step,
-                                                 action_priority_list_t* assisted_combat )
-{
-  std::string options = "";
-  std::string comment = "";
-  for ( const auto& rule : assisted_combat_rule_data_t::data( step.id, is_ptr() ) )
-  {
-    parsed_assisted_combat_rule_t rule_str = parse_assisted_combat_rule( rule, step );
-    if ( !rule_str.expr.empty() )
-      options += options.empty() ? rule_str.expr : "&" + rule_str.expr;
-    if ( !rule_str.comment.empty() )
-      comment += comment.empty() ? rule_str.comment : ", " + rule_str.comment;
-  }
-
-  // This is kinda ugly, maybe find a better way to do this?
-  if ( !options.empty() )
-  {
-    std::string name = blizzard_apl_action_replace( options );
-    if ( !name.empty() )
-    {
-      assisted_combat->add_action( name + ",can_have_one_button_penalty=1,if=" + options, comment );
-      return;
-    }
-  }
-
-  for ( const auto& name : action_names_from_spell_id( step.spell_id ) )
-  {
-    if ( !name.empty() )
-    {
-      if ( options.empty() )
-        assisted_combat->add_action( name + ",can_have_one_button_penalty=1", comment );
-      else
-        assisted_combat->add_action( name + ",can_have_one_button_penalty=1,if=" + options, comment );
-    }
-  }
-}
-
 // death_knight_t::action_names_from_spell_id ===============================
 std::vector<std::string> death_knight_t::action_names_from_spell_id( unsigned int spell_id ) const
 {
@@ -14813,7 +14745,7 @@ inline death_knight_td_t::death_knight_td_t( player_t& target, death_knight_t& p
   debuff.razorice = buff_t::find( &target, "razorice", &p );
   if ( debuff.razorice )
   {
-    debuff.razorice->set_default_value_from_effect( 1 )->set_period( 0_ms )->apply_affecting_aura(
+    debuff.razorice->set_default_value_from_effect( 1 )->disable_ticking( true )->apply_affecting_aura(
         p.talent.unholy_bond );
   }
   if ( !debuff.razorice )
@@ -14822,7 +14754,7 @@ inline death_knight_td_t::death_knight_td_t( player_t& target, death_knight_t& p
                                        p.talent.frost.arctic_assault->ok(),
                                    *this, "razorice", p.spell.razorice_debuff )
                           ->set_default_value_from_effect( 1 )
-                          ->set_period( 0_ms )
+                          ->disable_ticking( true )
                           ->apply_affecting_aura( p.talent.unholy_bond );
   }
 
@@ -15466,7 +15398,7 @@ void death_knight_t::create_buffs()
 
   buffs.legion_of_souls =
       make_fallback( talent.unholy.legion_of_souls.ok(), this, "legion_of_souls", talent.unholy.legion_of_souls )
-          ->set_period( 0_ms )
+          ->disable_ticking( true )
           ->set_cooldown( 0_ms );
 
   buffs.unholy_commander = make_fallback( sets->has_set_bonus( DEATH_KNIGHT_UNHOLY, TWW1, B4 ), this,
@@ -16172,97 +16104,6 @@ void death_knight_t::adjust_dynamic_cooldowns()
   _runes.update_coefficient();
 }
 
-// Basic Parse Effects implementation for pets. Mostly applies to Dancing Rune Weapon currently
-// Other pets (such as Mograine from Riders) also benefit from this due to executing spells contained in whitelists
-template <class T_PET, class Base>
-void pets::pet_action_t<T_PET, Base>::apply_pet_action_effects()
-{
-  // Blood
-  parse_effects( dk()->buffs.consumption );
-  parse_effects( dk()->buffs.crimson_scourge );
-  parse_effects( dk()->buffs.ossified_vitriol );
-  parse_effects( dk()->buffs.sanguine_ground );
-  parse_effects( dk()->buffs.heartrend, dk()->talent.blood.heartrend );
-  parse_effects( dk()->buffs.hemostasis );
-  parse_effects( dk()->buffs.ossuary );
-  parse_effects( dk()->buffs.luck_of_the_draw, effect_mask_t( true ).disable( 4, 5 ) );
-
-  // Don't auto parse coag, since there is some snapshot behavior when the weapon dies
-  // parse_effects( dk()->buffs.coagulopathy );
-
-  // Frost
-  parse_effects( dk()->mastery.frozen_heart );
-  parse_effects( dk()->buffs.remorseless_winter, dk()->talent.cleaving_strikes );  // Affects Trollbane's Frostscythe
-  parse_effects( dk()->buffs.frozen_dominion_remorseless_winter, dk()->talent.cleaving_strikes );
-  parse_effects( dk()->buffs.killing_machine, dk()->talent.frost.killing_streak );
-
-  // Unholy
-  parse_effects( dk()->buffs.unholy_assault );
-  parse_effects( dk()->mastery.dreadblade );
-
-  // Rider of the Apocalypse
-  parse_effects( dk()->buffs.mograines_might );
-  parse_effects( dk()->buffs.a_feast_of_souls ); 
-  auto tww3_rider_mask = effect_mask_t( true );
-  switch ( dk()->specialization() )
-  {
-    case DEATH_KNIGHT_UNHOLY:
-      tww3_rider_mask.disable( 3, 5, 8 );
-      break;
-    case DEATH_KNIGHT_FROST:
-      tww3_rider_mask.disable( 2, 4, 6 );
-      break;
-    default:
-      break;
-  }
-  parse_effects( dk()->sets->set( HERO_RIDER_OF_THE_APOCALYPSE, TWW3, B2 ), tww3_rider_mask );
-
-  // San'layn
-  parse_effects(
-      dk()->buffs.essence_of_the_blood_queen,
-      [ & ]( double v ) {
-        if ( dk()->spec.blood_death_knight->ok() )
-          v += dk()->spec.blood_death_knight->effectN( 19 ).percent();
-        if ( dk()->spec.unholy_death_knight->ok() )
-          v += dk()->spec.unholy_death_knight->effectN( 21 ).percent();
-        if ( dk()->buffs.gift_of_the_sanlayn->check() )
-          v *= 1.0 + dk()->buffs.gift_of_the_sanlayn->check_value();
-        return v;
-      },
-      dk()->talent.sanlayn.frenzied_bloodthirst );
-}
-
-template <class T_PET, class Base>
-void pets::pet_action_t<T_PET, Base>::apply_pet_target_effects()
-{
-  using namespace pets;
-  /* NOTE NOTE NOTE NOTE NOTE
-  As of 2024 Aug 18th, while testing for TWW we observed that if the pet applies the debuff, like DRW does for blood
-  plague they are considered the caster, and as such, they get the benefit of the casters amps (aura 271).  If the
-  player applies the debuff the pet does not gain the benefit of the caster debuff, but does gain the benefit for
-  pet/guardian auras (aura 380/381) if they exist.
-
-  Auras 380 and 381 get applied in parse_player_effects of the DK.
-
-  Below we should only have debuffs that are cast by pets and guardians, that apply aura 271.
-  */
-  // Shared
-  parse_target_effects( d_fn( &death_knight_pet_td_t::dots_t::blood_plague ), dk()->spell.blood_plague,
-                        dk()->talent.unholy.morbidity, dk()->talent.blood.coagulopathy );
-
-  // Blood
-
-  // Frost
-
-  // Unholy
-
-  // Rider of the Apocalypse
-
-  // Deathbringer
-
-  // San'layn
-}
-
 void death_knight_t::apply_effect_modifying_effects()
 {
   auto tww3_infliction_mask = effect_mask_t( true );
@@ -16292,57 +16133,61 @@ void death_knight_t::apply_effect_modifying_effects()
       get_modified_spell( talent.sanlayn.pact_of_the_sanlayn )->parse_effects( spec.unholy_death_knight );
 }
 
-template <class Base>
-void death_knight_action_t<Base>::apply_action_effects()
+void death_knight_t::apply_action_effects( action_t* a, bool pet )
 {
+  auto action = dynamic_cast<parse_action_base_t*>( a );
+  assert( action );
+
   // Shared
-  parse_effects( p()->buffs.blood_draw );
+  action->parse_effects( buffs.blood_draw );
 
   // Blood
-  parse_effects( p()->buffs.coagulopathy );
-  parse_effects( p()->buffs.consumption );
-  parse_effects( p()->buffs.crimson_scourge );
-  parse_effects( p()->buffs.ossified_vitriol );
-  parse_effects( p()->buffs.sanguine_ground );
-  parse_effects( p()->buffs.heartrend, p()->talent.blood.heartrend );
-  parse_effects( p()->buffs.hemostasis );
-  parse_effects( p()->buffs.ossuary );
-  parse_effects( p()->buffs.luck_of_the_draw, effect_mask_t( true ).disable( 4, 5 ) );
-  if ( p()->sets->has_set_bonus( DEATH_KNIGHT_BLOOD, TWW2, B4 ) )
-    parse_effects( p()->buffs.luck_of_the_draw, effect_mask_t( false ).enable( 5 ) );
+  // Don't auto parse coag, since there is some snapshot behavior when the DRW dies
+  if ( !pet )
+    action->parse_effects( buffs.coagulopathy );
+  action->parse_effects( buffs.consumption );
+  action->parse_effects( buffs.crimson_scourge );
+  action->parse_effects( buffs.ossified_vitriol );
+  action->parse_effects( buffs.sanguine_ground );
+  action->parse_effects( buffs.heartrend, talent.blood.heartrend );
+  action->parse_effects( buffs.hemostasis );
+  action->parse_effects( buffs.ossuary );
+  action->parse_effects( buffs.luck_of_the_draw, effect_mask_t( true ).disable( 4, 5 ) );
+  if ( sets->has_set_bonus( DEATH_KNIGHT_BLOOD, TWW2, B4 ) )
+    action->parse_effects( buffs.luck_of_the_draw, effect_mask_t( false ).enable( 5 ) );
 
   // Frost
-  parse_effects( p()->buffs.rime, p()->talent.frost.northwinds );
-  parse_effects( p()->buffs.gathering_storm );
-  parse_effects( p()->buffs.killing_machine, p()->talent.frost.killing_streak );
-  parse_effects( p()->mastery.frozen_heart );
-  parse_effects( p()->talent.frost.smothering_offense );
-  parse_effects( p()->buffs.winning_streak_frost, p()->sets->set( DEATH_KNIGHT_FROST, TWW2, B4 ) );
-  parse_effects( p()->buffs.icy_onslaught );
-  parse_effects( p()->buffs.remorseless_winter, p()->talent.cleaving_strikes );
-  parse_effects( p()->buffs.frozen_dominion_remorseless_winter, p()->talent.cleaving_strikes );
-  parse_effects( p()->buffs.empower_rune_weapon, p()->talent.frost.obliteration->effectN( 1 ).trigger() );
+  action->parse_effects( buffs.rime, talent.frost.northwinds );
+  action->parse_effects( buffs.gathering_storm );
+  action->parse_effects( buffs.killing_machine, talent.frost.killing_streak );
+  action->parse_effects( mastery.frozen_heart );
+  action->parse_effects( talent.frost.smothering_offense );
+  action->parse_effects( buffs.winning_streak_frost, sets->set( DEATH_KNIGHT_FROST, TWW2, B4 ) );
+  action->parse_effects( buffs.icy_onslaught );
+  action->parse_effects( buffs.remorseless_winter, talent.cleaving_strikes );
+  action->parse_effects( buffs.frozen_dominion_remorseless_winter, talent.cleaving_strikes );
+  action->parse_effects( buffs.empower_rune_weapon, talent.frost.obliteration->effectN( 1 ).trigger() );
 
   // Unholy
-  parse_effects( p()->buffs.unholy_assault );
-  parse_effects( p()->buffs.sudden_doom, p()->talent.unholy.harbinger_of_doom, CONSUME_BUFF );
-  parse_effects( p()->buffs.plaguebringer, p()->talent.unholy.plaguebringer );
-  parse_effects( p()->buffs.commander_of_the_dead, p()->talent.unholy.commander_of_the_dead );
+  action->parse_effects( buffs.unholy_assault );
+  action->parse_effects( buffs.sudden_doom, talent.unholy.harbinger_of_doom, CONSUME_BUFF );
+  action->parse_effects( buffs.plaguebringer, talent.unholy.plaguebringer );
+  action->parse_effects( buffs.commander_of_the_dead, talent.unholy.commander_of_the_dead );
   // Dont parse effect 6 due to the way this effect works.
-  parse_effects( p()->mastery.dreadblade, effect_mask_t( true ).disable( 6 ) );
-  parse_effects( p()->buffs.winning_streak_unholy, [ & ]( double v ) {
+  action->parse_effects( mastery.dreadblade, effect_mask_t( true ).disable( 6 ) );
+  action->parse_effects( buffs.winning_streak_unholy, [ & ]( double v ) {
     v *= 0.1;  // Divides by 10 in spell data
-    if ( p()->buffs.dark_transformation->check() )
-      v *= 1.0 + p()->sets->set( DEATH_KNIGHT_UNHOLY, TWW2, B4 )->effectN( 1 ).percent();
+    if ( buffs.dark_transformation->check() )
+      v *= 1.0 + sets->set( DEATH_KNIGHT_UNHOLY, TWW2, B4 )->effectN( 1 ).percent();
 
     return v;
   } );
 
   // Rider of the Apocalypse
-  parse_effects( p()->buffs.mograines_might );
-  parse_effects( p()->buffs.a_feast_of_souls );
+  action->parse_effects( buffs.mograines_might );
+  action->parse_effects( buffs.a_feast_of_souls );
   auto tww3_rider_mask = effect_mask_t( true );
-  switch ( p()->specialization() )
+  switch ( specialization() )
   {
     case DEATH_KNIGHT_UNHOLY:
       tww3_rider_mask.disable( 3, 5, 8 );
@@ -16353,15 +16198,15 @@ void death_knight_action_t<Base>::apply_action_effects()
     default:
       break;
   }
-  parse_effects( p()->sets->set( HERO_RIDER_OF_THE_APOCALYPSE, TWW3, B2 ), tww3_rider_mask );
+  action->parse_effects( sets->set( HERO_RIDER_OF_THE_APOCALYPSE, TWW3, B2 ), tww3_rider_mask );
 
   // Deathbringer
-  parse_effects( p()->buffs.dark_talons_shadowfrost, p()->talent.deathbringer.dark_talons );
-  parse_effects( p()->buffs.bind_in_darkness, p()->talent.deathbringer.bind_in_darkness );
-  parse_effects( p()->buffs.exterminate );
-  parse_effects( p()->buffs.reaper_of_souls ); 
+  action->parse_effects( buffs.dark_talons_shadowfrost, talent.deathbringer.dark_talons );
+  action->parse_effects( buffs.bind_in_darkness, talent.deathbringer.bind_in_darkness );
+  action->parse_effects( buffs.exterminate );
+  action->parse_effects( buffs.reaper_of_souls );
   auto tww3_deathbringer_mask = effect_mask_t( true );
-  switch ( p()->specialization() )
+  switch ( specialization() )
   {
     case DEATH_KNIGHT_BLOOD:
       tww3_deathbringer_mask.disable( 1, 4, 7 );
@@ -16372,62 +16217,83 @@ void death_knight_action_t<Base>::apply_action_effects()
     default:
       break;
   }
-  parse_effects( p()->sets->set( HERO_DEATHBRINGER, TWW3, B4 ), tww3_deathbringer_mask );
+  action->parse_effects( sets->set( HERO_DEATHBRINGER, TWW3, B4 ), tww3_deathbringer_mask );
 
   // San'layn
-  parse_effects( p()->buffs.visceral_strength_unholy, p()->talent.sanlayn.visceral_strength );
-  parse_effects(
-      p()->buffs.essence_of_the_blood_queen,
+  action->parse_effects( buffs.visceral_strength_unholy, talent.sanlayn.visceral_strength );
+  action->parse_effects(
+      buffs.essence_of_the_blood_queen,
       [ & ]( double v ) {
-        if ( p()->spec.blood_death_knight->ok() )
-          v += p()->spec.blood_death_knight->effectN( 19 ).percent();
-        if ( p()->spec.unholy_death_knight->ok() )
-          v += p()->spec.unholy_death_knight->effectN( 21 ).percent();
-        if ( p()->buffs.gift_of_the_sanlayn->check() )
-          v *= 1.0 + p()->buffs.gift_of_the_sanlayn->check_value();
+        if ( spec.blood_death_knight->ok() )
+          v += spec.blood_death_knight->effectN( 19 ).percent();
+        if ( spec.unholy_death_knight->ok() )
+          v += spec.unholy_death_knight->effectN( 21 ).percent();
+        if ( buffs.gift_of_the_sanlayn->check() )
+          v *= 1.0 + buffs.gift_of_the_sanlayn->check_value();
         return v;
       },
-      p()->talent.sanlayn.frenzied_bloodthirst );
+      talent.sanlayn.frenzied_bloodthirst );
 }
 
-template <class Base>
-void death_knight_action_t<Base>::apply_target_effects()
+void death_knight_t::apply_target_action_effects( action_t* a, bool pet )
 {
-  // Shared
-  parse_target_effects( d_fn( &death_knight_td_t::dots_t::virulent_plague ), p()->spell.virulent_plague,
-                        p()->talent.unholy.morbidity );
-  parse_target_effects( d_fn( &death_knight_td_t::dots_t::frost_fever ), p()->spell.frost_fever,
-                        p()->talent.unholy.morbidity );
-  parse_target_effects( d_fn( &death_knight_td_t::dots_t::blood_plague ), p()->spell.blood_plague,
-                        p()->talent.unholy.morbidity, p()->talent.blood.coagulopathy );
-  parse_target_effects( d_fn( &death_knight_td_t::dots_t::unholy_blight, false ), p()->spell.unholy_blight_dot,
-                        p()->talent.unholy.morbidity );
-  parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::apocalypse_war ), p()->spell.apocalypse_war_debuff,
-                        p()->talent.unholy_bond, p()->spell.attuned_to_the_aether );
-  parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::razorice ), p()->spell.razorice_debuff,
-                        p()->talent.unholy_bond, p()->spell.attuned_to_the_aether );
-  parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::brittle ), p()->spell.brittle_debuff );
+  auto action = dynamic_cast<parse_action_base_t*>( a );
+  assert( action );
 
-  // Blood
+  /* NOTE NOTE NOTE NOTE NOTE
+  As of 2024 Aug 18th, while testing for TWW we observed that if the pet applies the debuff, like DRW does for blood
+  plague they are considered the caster, and as such, they get the benefit of the casters amps (aura 271).  If the
+  player applies the debuff the pet does not gain the benefit of the caster debuff, but does gain the benefit for
+  pet/guardian auras (aura 380/381) if they exist.
 
-  // Frost
-  parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::everfrost ),
-                        p()->talent.frost.everfrost->effectN( 1 ).trigger(), p()->talent.frost.everfrost );
+  Auras 380 and 381 get applied in parse_player_effects of the DK.
 
-  // Unholy
-  parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::death_rot ), p()->spell.death_rot_debuff );
-  parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::rotten_touch ), p()->spell.rotten_touch_debuff );
-  parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::unholy_aura ), p()->spell.unholy_aura_debuff,
-                        p()->talent.unholy.unholy_aura );
+  Below we should only have debuffs that are cast by pets and guardians, that apply aura 271.
+  */
+  if ( pet )
+  {
+    action->parse_target_effects( pets::d_fn( &pets::death_knight_pet_td_t::dots_t::blood_plague ), spell.blood_plague,
+                                  talent.unholy.morbidity, talent.blood.coagulopathy );
+  }
+  else
+  {
+    // Shared
+    action->parse_target_effects( d_fn( &death_knight_td_t::dots_t::virulent_plague ), spell.virulent_plague,
+                                  talent.unholy.morbidity );
+    action->parse_target_effects( d_fn( &death_knight_td_t::dots_t::frost_fever ), spell.frost_fever,
+                                  talent.unholy.morbidity );
+    action->parse_target_effects( d_fn( &death_knight_td_t::dots_t::blood_plague ), spell.blood_plague,
+                                  talent.unholy.morbidity, talent.blood.coagulopathy );
+    action->parse_target_effects( d_fn( &death_knight_td_t::dots_t::unholy_blight, false ), spell.unholy_blight_dot,
+                                  talent.unholy.morbidity );
+    action->parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::apocalypse_war ), spell.apocalypse_war_debuff,
+                                  talent.unholy_bond, spell.attuned_to_the_aether );
+    action->parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::razorice ), spell.razorice_debuff,
+                                  talent.unholy_bond, spell.attuned_to_the_aether );
+    action->parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::brittle ), spell.brittle_debuff );
 
-  // Rider of the Apocalypse
-  if( p()->sets->has_set_bonus( HERO_RIDER_OF_THE_APOCALYPSE, TWW3, B4 ) )
-    parse_target_effects( d_fn( &death_knight_td_t::dots_t::undeath, false ), p()->pet_spell.undeath_dot, p()->spell.tww3_4pc_rider );
+    // Blood
 
-  // Deathbringer
+    // Frost
+    action->parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::everfrost ),
+                                  talent.frost.everfrost->effectN( 1 ).trigger(), talent.frost.everfrost );
 
-  // San'layn
-  parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::incite_terror ), p()->spell.incite_terror_debuff );
+    // Unholy
+    action->parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::death_rot ), spell.death_rot_debuff );
+    action->parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::rotten_touch ), spell.rotten_touch_debuff );
+    action->parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::unholy_aura ), spell.unholy_aura_debuff,
+                                  talent.unholy.unholy_aura );
+
+    // Rider of the Apocalypse
+    if ( sets->has_set_bonus( HERO_RIDER_OF_THE_APOCALYPSE, TWW3, B4 ) )
+      action->parse_target_effects( d_fn( &death_knight_td_t::dots_t::undeath, false ), pet_spell.undeath_dot,
+                                    spell.tww3_4pc_rider );
+
+    // Deathbringer
+
+    // San'layn
+    action->parse_target_effects( d_fn( &death_knight_td_t::debuffs_t::incite_terror ), spell.incite_terror_debuff );
+  }
 }
 
 void death_knight_t::parse_player_effects()
@@ -16724,6 +16590,7 @@ public:
     }
     os << "<div class=\"clear\"></div>\n";
     p.parsed_effects_html( os );
+    modified_spell_data_t::parsed_effects_html( os, *p.sim, p.modified_spells );
     os << "</div>\n";
   }
 

@@ -283,9 +283,6 @@ struct execution_sentence_t : public paladin_melee_attack_t
     if ( ! ( p->talents.execution_sentence->ok() ) )
       background = true;
 
-    // Spelldata doesn't seem to have this
-    hasted_gcd = true;
-
     // ... this appears to be true for the base damage only,
     // and is not automatically obtained from spell data.
     affected_by.highlords_judgment = true;
@@ -564,14 +561,19 @@ struct divine_storm_t: public holy_power_consumer_t<paladin_melee_attack_t>
 
     if ( p->talents.herald_of_the_sun.second_sunrise->ok() )
     {
-      sunrise_echo = new divine_storm_echo_t( p, p->talents.herald_of_the_sun.second_sunrise->effectN( 2 ).percent() );
+      // ret spec aura applies +20% to second sunrise effectiveness
+      // temporary fix until register_passive_effect_modifier() is implemented
+      auto effectiveness = p->talents.herald_of_the_sun.second_sunrise->effectN( 2 ).percent() +
+                           p->spec.retribution_paladin_2->effectN( 26 ).percent();
+
+      sunrise_echo = new divine_storm_echo_t( p, effectiveness );
       add_child( sunrise_echo );
     }
   }
 
   divine_storm_t( paladin_t* p, bool is_free, double mul ) :
     holy_power_consumer_t( "divine_storm", p, p->talents.divine_storm ),
-    tempest( nullptr )
+    tempest( nullptr ), echo( nullptr ), sunrise_echo( nullptr )
   {
     is_divine_storm = true;
     aoe = -1;
@@ -592,7 +594,12 @@ struct divine_storm_t: public holy_power_consumer_t<paladin_melee_attack_t>
 
     if ( p->talents.herald_of_the_sun.second_sunrise->ok() )
     {
-      sunrise_echo = new divine_storm_echo_t( p, p->talents.herald_of_the_sun.second_sunrise->effectN( 2 ).percent() * mul );
+      // ret spec aura applies +20% to second sunrise effectiveness
+      // temporary fix until register_passive_effect_modifier() is implemented
+      auto effectiveness = p->talents.herald_of_the_sun.second_sunrise->effectN( 2 ).percent() +
+                           p->spec.retribution_paladin_2->effectN( 26 ).percent();
+
+      sunrise_echo = new divine_storm_echo_t( p, effectiveness * mul );
       add_child( sunrise_echo );
     }
   }
@@ -625,7 +632,12 @@ struct divine_storm_t: public holy_power_consumer_t<paladin_melee_attack_t>
 
     if ( sunrise_echo && p()->cooldowns.second_sunrise_icd->up() )
     {
-      if ( rng().roll( p()->talents.herald_of_the_sun.second_sunrise->effectN( 1 ).percent() ) )
+      // ret spec aura applies +5% to second sunrise chance
+      // temporary fix until register_passive_effect_modifier() is implemented
+      auto sunrise_chance = p()->talents.herald_of_the_sun.second_sunrise->effectN( 1 ).percent() +
+                            p()->spec.retribution_paladin_2->effectN( 25 ).percent();
+
+      if ( rng().roll( sunrise_chance ) )
       {
         p()->cooldowns.second_sunrise_icd->start();
         // TODO(mserrano): validate the correct delay here
@@ -1008,9 +1020,6 @@ struct justicars_vengeance_t : public holy_power_consumer_t<paladin_melee_attack
     holy_power_consumer_t( "justicars_vengeance", p, p->talents.justicars_vengeance )
   {
     parse_options( options_str );
-
-    // Spelldata doesn't have this
-    hasted_gcd = true;
 
     weapon_multiplier = 0; // why is this needed?
 
@@ -1783,7 +1792,7 @@ void paladin_t::init_spells_retribution()
   talents.healing_hands  = find_talent_spell( talent_tree::CLASS, "Healing Hands" );
   // Spec passives and useful spells
   spec.retribution_paladin = find_specialization_spell( "Retribution Paladin" );
-  spec.retribution_paladin_2 = find_spell( 412314 );
+  spec.retribution_paladin_2 = specialization() == PALADIN_RETRIBUTION ? find_spell( 412314 ) : spell_data_t::not_found();
   mastery.highlords_judgment = find_mastery_spell( PALADIN_RETRIBUTION );
 
   if ( specialization() == PALADIN_RETRIBUTION )

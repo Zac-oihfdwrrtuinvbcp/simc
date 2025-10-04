@@ -6,6 +6,7 @@
 #define SC_WARLOCK_PETS_HPP
 
 #include "simulationcraft.hpp"
+#include "action/parse_effects.hpp"
 
 namespace warlock
 {
@@ -16,11 +17,51 @@ struct warlock_pet_t;
 
 struct warlock_pet_td_t : public actor_target_data_t
 {
-  propagate_const<buff_t*> debuff_whiplash;
+  struct debuffs_t
+  {
+    propagate_const<buff_t*> whiplash;
+  } debuffs;
+
+  struct dots_t
+  {
+  } dots;
 
   warlock_pet_t& pet;
   warlock_pet_td_t( player_t*, warlock_pet_t& );
 };
+
+// utility to create target_effect_t compatible functions from warlock_pet_td_t member references
+template <typename T>
+static std::function<int( actor_target_data_t* )> pet_d_fn( T d, bool stack = true )
+{
+  if constexpr ( std::is_invocable_v<T, warlock_pet_td_t::debuffs_t> )
+  {
+    if ( stack )
+      return [ d ]( actor_target_data_t* t ) {
+        return std::invoke( d, static_cast<warlock_pet_td_t*>( t )->debuffs )->check();
+      };
+    else
+      return [ d ]( actor_target_data_t* t ) {
+        return std::invoke( d, static_cast<warlock_pet_td_t*>( t )->debuffs )->check() > 0;
+      };
+  }
+  else if constexpr ( std::is_invocable_v<T, warlock_pet_td_t::dots_t> )
+  {
+    if ( stack )
+      return [ d ]( actor_target_data_t* t ) {
+        return std::invoke( d, static_cast<warlock_pet_td_t*>( t )->dots )->current_stack();
+      };
+    else
+      return [ d ]( actor_target_data_t* t ) {
+        return std::invoke( d, static_cast<warlock_pet_td_t*>( t )->dots )->is_ticking();
+      };
+  }
+  else
+  {
+    static_assert( static_false<T>, "Not a valid member of warlock_pet_td_t" );
+    return nullptr;
+  }
+}
 
 struct warlock_pet_t : public pet_t
 {
@@ -30,6 +71,7 @@ struct warlock_pet_t : public pet_t
 
   struct buffs_t
   {
+    propagate_const<buff_t*> demonic_inspiration; // Hidden buff from talent that gives haste to some demons
     propagate_const<buff_t*> embers;  // Infernal Shard Generation
     propagate_const<buff_t*> demonic_strength; // Talent that buffs Felguard
     propagate_const<buff_t*> grimoire_of_service; // Buff used by Grimoire: Felguard talent
@@ -37,15 +79,18 @@ struct warlock_pet_t : public pet_t
     propagate_const<buff_t*> dread_calling;
     propagate_const<buff_t*> imp_gang_boss; // Aura applied to some Wild Imps for increased damage (and size)
     propagate_const<buff_t*> antoran_armaments; // Permanent aura when talented, 20% increased damage to all abilities plus Soul Strike cleave
+    propagate_const<buff_t*> ferocity_of_fharg;
     propagate_const<buff_t*> the_expendables;
-    propagate_const<buff_t*> fiendish_wrath; // Guillotine talent buff, causes AoE melee attacks and prevents Felstorm
-    propagate_const<buff_t*> demonic_inspiration; // Haste buff triggered by filling a Soul Shard
-    propagate_const<buff_t*> wrathful_minion; // Damage buff triggered by filling a Soul Shard
     propagate_const<buff_t*> demonic_power;
     propagate_const<buff_t*> empowered_legion_strike; // TWW1 Demonology 4pc buff
     propagate_const<buff_t*> demonic_hunger; // TWW2 Demonology 2pc buff
     propagate_const<buff_t*> spliced_4pc; // TWW2 Demonology 4pc dummy buff
   } buffs;
+
+  struct affected_by_t
+  {
+    bool demonic_inspiration = false;
+  } affected_by;
 
   bool is_main_pet = false;
   bool melee_on_summon = true; // Set this to false for a pet to prevent t=0 melees. You MUST schedule a new auto attack manually elsewhere in the implementation if this is disabled
@@ -57,11 +102,14 @@ struct warlock_pet_t : public pet_t
   void schedule_ready( timespan_t = 0_ms, bool = false ) override;
   double composite_player_multiplier( school_e ) const override;
   double composite_spell_haste() const override;
+  double composite_melee_haste() const override;
   double composite_spell_cast_speed() const override;
   double composite_melee_auto_attack_speed() const override;
-  double composite_player_critical_damage_multiplier( const action_state_t* ) const override;
+  void apply_affecting_auras( action_t& action ) override;
   void arise() override;
   void demise() override;
+
+  virtual void heartbeat_update_event();
 
   target_specific_t<warlock_pet_td_t> target_data;
 
@@ -147,17 +195,21 @@ protected:
 
 // Template for common warlock pet action code.
 template <class ACTION_BASE>
-struct warlock_pet_action_t : public ACTION_BASE
+struct warlock_pet_action_t : public parse_action_effects_t<ACTION_BASE>
 {
 private:
-  typedef ACTION_BASE ab;  // action base, eg. spell_t
+  typedef parse_action_effects_t<ACTION_BASE> ab;  // action base, eg. spell_t
 public:
   typedef warlock_pet_action_t base_t;
 
   warlock_pet_action_t( util::string_view n, warlock_pet_t* p, const spell_data_t* s = spell_data_t::nil() )
     : ab( n, p, s )
   {
-    ab::may_crit = true;
+    if ( !this->data().flags( spell_attribute::SX_CANNOT_CRIT ) && this->harmful )
+      this->may_crit = true;
+
+    if ( this->data().flags( spell_attribute::SX_TICK_MAY_CRIT ) )
+      this->tick_may_crit = true;
 
     // If pets are not reported separately, create single stats_t objects for the various pet
     // abilities.
@@ -175,6 +227,32 @@ public:
         }
       }
     }
+
+    if ( this->data().ok() )
+    {
+      apply_pet_action_effects();
+      if ( this->type == action_e::ACTION_SPELL || this->type == action_e::ACTION_ATTACK )
+      {
+        apply_pet_target_effects();
+      }
+    }
+  }
+
+  void apply_pet_action_effects()
+  { }
+
+  void apply_pet_target_effects()
+  { }
+
+  template <typename... Ts>
+  void parse_effects( Ts&&... args )
+  {
+    ab::parse_effects( std::forward<Ts>( args )... );
+  }
+  template <typename... Ts>
+  void parse_target_effects( Ts&&... args )
+  {
+    ab::parse_target_effects( std::forward<Ts>( args )... );
   }
 
   warlock_pet_t* p()
@@ -208,7 +286,7 @@ public:
   {
     double m = ab::composite_target_multiplier( target );
 
-    if ( p()->o()->talents.shadowtouched.ok() && dbc::has_common_school( ab::get_school(), SCHOOL_SHADOW ) && owner_td( target )->debuffs_wicked_maw->check() )
+    if ( p()->o()->talents.shadowtouched.ok() && dbc::has_common_school( ab::get_school(), SCHOOL_SHADOW ) && owner_td( target )->debuffs.wicked_maw->check() )
       m *= 1.0 + p()->o()->talents.shadowtouched->effectN( 1 ).percent();
 
     return m;
@@ -342,7 +420,6 @@ namespace demonology
 struct felguard_pet_t : public warlock_pet_t
 {
   action_t* soul_strike;
-  action_t* felguard_guillotine;
   action_t* hatred_proc;
   cooldown_t* felstorm_cd;
   cooldown_t* dstr_cd;
@@ -359,7 +436,6 @@ struct felguard_pet_t : public warlock_pet_t
   timespan_t available() const override;
   void arise() override;
   double composite_player_multiplier( school_e ) const override;
-  double composite_melee_auto_attack_speed() const override;
   double composite_melee_crit_chance() const override;
   double composite_spell_crit_chance() const override;
 
@@ -382,7 +458,6 @@ struct grimoire_felguard_pet_t : public warlock_pet_t
   timespan_t available() const override;
   void arise() override;
   void demise() override;
-  double composite_player_multiplier( school_e ) const override;
 };
 
 struct wild_imp_pet_t : public warlock_pet_t
@@ -407,6 +482,7 @@ private:
 struct dreadstalker_t : public warlock_pet_t
 {
   int dreadbite_executes;
+  int leap_executes;
   timespan_t server_action_delay;
 
   dreadstalker_t( warlock_t* );
@@ -442,7 +518,6 @@ struct demonic_tyrant_t : public warlock_pet_t
 {
   demonic_tyrant_t( warlock_t*, util::string_view = "demonic_tyrant" );
   action_t* create_action( util::string_view, util::string_view ) override;
-  double composite_player_multiplier( school_e ) const override;
 };
 
 struct doomguard_t : public warlock_simple_pet_t
@@ -542,6 +617,7 @@ namespace diabolist
     overlord_t( warlock_t*, util::string_view = "overlord" );
     void arise() override;
     action_t* create_action( util::string_view, util::string_view ) override;
+    double composite_player_critical_damage_multiplier( const action_state_t* ) const override;
   };
 
   struct mother_of_chaos_t : public warlock_pet_t

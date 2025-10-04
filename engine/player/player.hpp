@@ -20,10 +20,11 @@
 #include "rating.hpp"
 #include "sc_enums.hpp"
 #include "sim/proc.hpp"
+#include "sim/proc_rng.hpp"
 #include "talent.hpp"
 #include "util/cache.hpp"
+#include "util/parse_util.hpp"
 #include "util/rng.hpp"
-#include "sim/proc_rng.hpp"
 #include "util/util.hpp"
 #include "weapon.hpp"
 
@@ -442,8 +443,9 @@ struct player_t : public actor_t
 
   player_processed_report_information_t report_information;
 
-  void sequence_add( const action_t* a, const player_t* target, timespan_t ts );
-  void sequence_add_wait( timespan_t amount, timespan_t ts );
+  void sequence_add_wait( timespan_t wait );
+  void sequence_add( const action_t* a, const player_t* target,
+                     std::function<void( std::string&, std::string& )> fn = nullptr );
 
   // Gear
   std::string meta_gem_str, potion_str, flask_str, food_str, rune_str;

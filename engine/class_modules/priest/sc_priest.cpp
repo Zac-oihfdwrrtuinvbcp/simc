@@ -36,8 +36,8 @@ struct power_word_shield_buff_t : public priest_buff_t<absorb_buff_t>
     set_absorb_source( player->get_stats( "power_word_shield" ) );
     set_cooldown( 0_s );
     initial_size = 0;
-    buff_period = 0_s;  // TODO: Work out why Power Word: Shield has buff period. Work out why shields ticking refreshes
-                        // them to full value.
+    disable_ticking( true );  // TODO: Work out why Power Word: Shield has buff period. Work out why shields ticking
+                              // refreshes them to full value.
   }
 
   bool trigger( int stacks, double value, double chance, timespan_t duration ) override
@@ -2241,7 +2241,6 @@ struct power_word_shield_t final : public priest_absorb_t
   {
     parse_options( options_str );
 
-    gcd_type         = gcd_haste_type::SPELL_CAST_SPEED;
     cooldown->hasted = true;
 
     disc_mastery = true;

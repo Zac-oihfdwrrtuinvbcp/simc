@@ -484,7 +484,6 @@ public:
     buff_t* beast_cleave; 
     buff_t* serpentine_rhythm;
     buff_t* serpentine_blessing;
-    buff_t* a_murder_of_crows;
     buff_t* huntmasters_call;
     buff_t* summon_fenryr;
     buff_t* summon_hati;
@@ -773,8 +772,6 @@ public:
     spell_data_ptr_t dire_beast;
     spell_data_ptr_t dire_beast_summon;
 
-    spell_data_ptr_t a_murder_of_crows;
-    spell_data_ptr_t a_murder_of_crows_dot;
     spell_data_ptr_t savagery;
     spell_data_ptr_t bestial_wrath;
     spell_data_ptr_t dire_command;
@@ -896,6 +893,7 @@ public:
     spell_data_ptr_t ebon_bowstring;
 
     spell_data_ptr_t banshees_mark;
+    spell_data_ptr_t a_murder_of_crows_dot;
     spell_data_ptr_t bleak_powder;
     spell_data_ptr_t bleak_powder_spell;
     spell_data_ptr_t umbral_reach;
@@ -3770,7 +3768,7 @@ void hunter_t::trigger_deathblow( bool activated )
     if ( talents.razor_fragments.ok() )
       buffs.razor_fragments->trigger();
   }
-  
+
   talents.black_arrow.ok() ? cooldowns.black_arrow->reset( !activated ) : cooldowns.kill_shot->reset( !activated );
 }
 
@@ -4936,8 +4934,7 @@ struct black_arrow_t final : public kill_shot_base_t
       p()->cooldowns.bleak_powder->start();
     }
 
-    // The chance is not in spell data and is hardcoded into the tooltip
-    if ( p()->talents.banshees_mark.ok() && rng().roll( 0.25 ) && p()->cooldowns.banshees_mark->up() )
+    if ( p()->talents.banshees_mark.ok() && rng().roll( p()->talents.banshees_mark->effectN( 2 ).percent() ) && p()->cooldowns.banshees_mark->up() )
     {
       p()->actions.a_murder_of_crows->execute_on_target( s->target ); 
       p()->cooldowns.banshees_mark->start();
@@ -6732,7 +6729,6 @@ struct coordinated_assault_t: public hunter_spell_t
 
     base_teleport_distance = data().max_range();
     movement_directionality = movement_direction_type::OMNI;
-    gcd_type = gcd_haste_type::ATTACK_HASTE;
 
     damage = p->get_background_action<damage_t>( "coordinated_assault_player" );
     add_child( damage );
@@ -7134,16 +7130,6 @@ struct kill_command_t: public hunter_spell_t
 
       if ( rng().roll( chance ) )
         p()->trigger_deathblow();
-    }
-
-    if ( p() -> talents.a_murder_of_crows.ok() )
-    {
-      p() -> buffs.a_murder_of_crows -> trigger();
-      if ( p() -> buffs.a_murder_of_crows -> at_max_stacks() )
-      {
-        p() -> actions.a_murder_of_crows -> execute_on_target( target );
-        p() -> buffs.a_murder_of_crows -> expire();
-      }
     }
 
     p()->cooldowns.wildfire_bomb->adjust( -wildfire_infusion_reduction );
@@ -7912,7 +7898,7 @@ hunter_td_t::hunter_td_t( player_t* t, hunter_t* p ) : actor_target_data_t( t, p
 
   debuffs.outland_venom = make_buff( *this, "outland_venom", p->talents.outland_venom_debuff )
     -> set_default_value( p->talents.outland_venom_debuff->effectN( 1 ).percent() )
-    -> set_period( 0_s );
+    -> disable_ticking( true );
 
   debuffs.kill_zone = make_buff( *this, "kill_zone", p->talents.kill_zone_debuff )
     -> set_default_value_from_effect( 2 )
@@ -8357,8 +8343,6 @@ void hunter_t::init_spells()
     talents.dire_beast                        = find_talent_spell( talent_tree::SPECIALIZATION, "Dire Beast", HUNTER_BEAST_MASTERY );
     talents.dire_beast_summon                 = find_spell( 219199 );
 
-    talents.a_murder_of_crows                 = find_talent_spell( talent_tree::SPECIALIZATION, "A Murder of Crows", HUNTER_BEAST_MASTERY );
-    talents.a_murder_of_crows_dot             = talents.a_murder_of_crows.ok() ? find_spell( 131894 ) : spell_data_t::not_found();
     talents.savagery                          = find_talent_spell( talent_tree::SPECIALIZATION, "Savagery", HUNTER_BEAST_MASTERY );
     talents.bestial_wrath                     = find_talent_spell( talent_tree::SPECIALIZATION, "Bestial Wrath", HUNTER_BEAST_MASTERY );
     talents.dire_command                      = find_talent_spell( talent_tree::SPECIALIZATION, "Dire Command", HUNTER_BEAST_MASTERY );
@@ -8493,8 +8477,7 @@ void hunter_t::init_spells()
     talents.ebon_bowstring = find_talent_spell( talent_tree::HERO, "Ebon Bowstring" );
 
     talents.banshees_mark = find_talent_spell( talent_tree::HERO, "Banshee's Mark" );
-    if ( !talents.a_murder_of_crows.ok() )
-      talents.a_murder_of_crows_dot = talents.banshees_mark.ok() ? find_spell( 131894 ) : spell_data_t::not_found();
+    talents.a_murder_of_crows_dot = talents.banshees_mark.ok() ? find_spell( 131894 ) : spell_data_t::not_found();
     talents.bleak_powder  = find_talent_spell( talent_tree::HERO, "Bleak Powder" );
     talents.bleak_powder_spell = talents.bleak_powder.ok() ? ( specialization() == HUNTER_MARKSMANSHIP ? find_spell( 467914 ) : find_spell( 472084 ) ) : spell_data_t::not_found();
     talents.umbral_reach = find_talent_spell( talent_tree::HERO, "Umbral Reach" );
@@ -8676,7 +8659,7 @@ void hunter_t::create_actions()
   if ( talents.laceration.ok() )
     actions.laceration = new attacks::laceration_t( this );
   
-  if ( talents.a_murder_of_crows.ok() || talents.banshees_mark.ok() )
+  if ( talents.banshees_mark.ok() )
     actions.a_murder_of_crows = new spells::a_murder_of_crows_t( this );
 
   if ( talents.howl_of_the_pack_leader.ok() )
@@ -8721,8 +8704,8 @@ void hunter_t::create_buffs()
   buffs.precise_shots = 
     make_buff( this, "precise_shots", talents.precise_shots_buff )
       ->set_default_value_from_effect( 1 )
-      ->apply_affecting_aura( talents.windrunner_quiver )
-      ->apply_affecting_aura( talents.unmatched_precision );
+      ->apply_affecting_aura( talents.unmatched_precision )
+      ->apply_affecting_aura( talents.windrunner_quiver );
 
   buffs.streamline =
     make_buff( this, "streamline", talents.streamline_buff )
@@ -8789,7 +8772,7 @@ void hunter_t::create_buffs()
   buffs.volley =
     make_buff( this, "volley", talents.volley_data )
       -> set_cooldown( 0_ms )
-      -> set_period( 0_ms ) // disable ticks as an optimization
+      -> disable_ticking( true ) // disable ticks as an optimization
       -> set_refresh_behavior( buff_refresh_behavior::DURATION );
 
   // Beast Mastery Tree
@@ -8866,9 +8849,6 @@ void hunter_t::create_buffs()
     make_buff( this, "serpentine_blessing", find_spell( 468704 ) )
     -> set_default_value_from_effect( 1 )
     -> set_chance( talents.serpentine_rhythm.ok() );
-
-  buffs.a_murder_of_crows = 
-    make_buff( this, "a_murder_of_crows", talents.a_murder_of_crows->effectN( 1 ).trigger() );
 
   buffs.huntmasters_call = 
     make_buff( this, "huntmasters_call", find_spell( 459731 ) );
@@ -9118,7 +9098,7 @@ void hunter_t::create_buffs()
         } );
 
   if ( specialization() == HUNTER_BEAST_MASTERY )
-    buffs.withering_fire->set_tick_callback( [ this ]( buff_t*, int, timespan_t ) { trigger_deathblow( true ); } );
+    buffs.withering_fire->set_tick_callback( [ this ]( buff_t*, int, timespan_t ) { trigger_deathblow(); } );
 
   buffs.the_bell_tolls = 
     make_buff( this, "the_bell_tolls", talents.the_bell_tolls_buff )

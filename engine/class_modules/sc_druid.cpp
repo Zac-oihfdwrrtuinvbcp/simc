@@ -490,7 +490,7 @@ static const spelleffect_data_t& find_trigger( T val )
           case A_PROC_TRIGGER_SPELL_WITH_VALUE:
           case A_PERIODIC_TRIGGER_SPELL:
           case A_PERIODIC_TRIGGER_SPELL_WITH_VALUE:
-          case A_285:
+          case A_LINKED_SPELL_WITH_VALUE:
             return eff;
           default:
             break;
@@ -2957,6 +2957,11 @@ struct druid_heal_t : public druid_spell_base_t<heal_t>
 
     if ( p->talent.flourish.ok() )
       affected_by.flourish = find_effect( p->talent.flourish, this, A_ADD_PCT_MODIFIER, P_TICK_TIME ).ok();
+
+    // temporary manual fix until register_passive_effect_modifiers() can go core
+    apply_affecting_aura( p->talent.circle_of_life_and_death_bear );
+    apply_affecting_aura( p->talent.circle_of_life_and_death_cat );
+    apply_affecting_aura( p->talent.lingering_healing );
   }
 
   virtual double harmony_multiplier( player_t* t ) const
@@ -4571,8 +4576,6 @@ struct adaptive_swarm_t final : public cat_attack_t
     adaptive_swarm_heal_t( druid_t* p ) : healing_swarm_t( p, "adaptive_swarm_heal", p->spec.adaptive_swarm_heal )
     {
       quiet = heal = true;
-
-      parse_effect_period( data().effectN( 1 ) );
     }
 
     player_t* new_swarm_target( player_t* exclude ) const override
@@ -5221,8 +5224,6 @@ struct lunar_inspiration_t final : public cp_generator_t
                  p->talent.lunar_inspiration.ok() ? p->find_spell( 155625 ) : spell_data_t::not_found() )
   {
     may_dodge = may_parry = may_block = false;
-    // LI is a spell, but we parent to cp_generator_t to get all the proper cat attack methods.
-    gcd_type = gcd_haste_type::SPELL_CAST_SPEED;
 
     s_data_reporting = p->talent.lunar_inspiration;
     dot_name = "lunar_inspiration";
@@ -5858,7 +5859,6 @@ struct bristling_fur_t final : public bear_attack_t
   DRUID_ABILITY( bristling_fur_t, bear_attack_t, "bristling_fur", p->talent.bristling_fur )
   {
     harmful = false;
-    gcd_type = gcd_haste_type::ATTACK_HASTE;
   }
 
   void execute() override
@@ -6051,7 +6051,7 @@ struct mangle_t final : public use_fluid_form_t<BEAR_FORM,
     if ( p->talent.incarnation_bear.ok() )
     {
       inc_targets =
-        as<int>( find_effect( p->spec.incarnation_bear, this, A_ADD_FLAT_MODIFIER, P_TARGET ).base_value() );
+        as<int>( find_effect( p->spec.incarnation_bear, this, A_ADD_FLAT_MODIFIER, P_CHAIN_TARGETS ).base_value() );
     }
 
     if ( p->talent.strike_for_the_heart.ok() )
@@ -7220,7 +7220,7 @@ struct frenzied_regeneration_t final : public bear_attacks::rage_spender_t<
       form_mask |= CAT_FORM;
 
       base_costs[ RESOURCE_ENERGY ] =
-        find_effect( p->talent.empowered_shapeshifting, this, A_ADD_FLAT_MODIFIER, P_RESOURCE_COST_1 )
+        find_effect( p->talent.empowered_shapeshifting, this, A_ADD_FLAT_MODIFIER, P_RESOURCE_COST_2 )
           .resource( RESOURCE_ENERGY );
     }
 
@@ -11674,7 +11674,7 @@ void druid_t::create_buffs()
       ->set_cooldown( 0_ms );
   if ( specialization() == DRUID_FERAL )
   {
-    buff.heart_of_the_wild->set_period( 0_ms );
+    buff.heart_of_the_wild->disable_ticking( true );
   }
   else
   {
@@ -11919,7 +11919,7 @@ void druid_t::create_buffs()
 
   buff.incarnation_cat =
     make_fallback( talent.incarnation_cat.ok(), this, "incarnation_avatar_of_ashamane", talent.incarnation_cat )
-      ->set_default_value_from_effect_type( A_ADD_PCT_MODIFIER, P_RESOURCE_COST )
+      ->set_default_value_from_effect_type( A_ADD_PCT_MODIFIER, P_RESOURCE_COST_1 )
       ->set_stack_change_callback(
         [ this,
           ag_dur = timespan_t::from_seconds( find_spell( 421440 )->effectN( 1 ).base_value() ) ]
@@ -12319,7 +12319,7 @@ void druid_t::create_buffs()
 
   buff.root_network = make_fallback( talent.root_network.ok(), this, "root_network", find_spell( 439887 ) )
     // TODO: confirm updating behavior where all stacks are decreased at once then recalibrated on tick
-    ->set_period( 0_ms );
+    ->disable_ticking( true );
 
   buff.ruthless_aggression = make_fallback( talent.ruthless_aggression.ok(),
     this, "ruthless_aggression", find_trigger( talent.ruthless_aggression ).trigger() )
@@ -15238,7 +15238,6 @@ void druid_t::apply_affecting_auras( action_t& a )
   a.apply_affecting_aura( talent.incessant_tempest );
   a.apply_affecting_aura( talent.instincts_of_the_claw );
   a.apply_affecting_aura( talent.killer_instinct );
-  a.apply_affecting_aura( talent.lingering_healing );
   a.apply_affecting_aura( talent.lore_of_the_grove );
   a.apply_affecting_aura( talent.nurturing_instinct );
   a.apply_affecting_aura( talent.packs_endurance );

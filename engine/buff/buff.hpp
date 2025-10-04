@@ -6,22 +6,24 @@
 #pragma once
 
 #include "config.hpp"
-#include <functional>
-#include <string>
-#include <utility>
-#include <vector>
-#include <memory>
 
-#include "util/timespan.hpp"
-#include "sc_enums.hpp"
 #include "dbc/data_enums.hh"
 #include "player/actor_pair.hpp"
+#include "sc_enums.hpp"
+#include "sim/uptime.hpp"
+#include "util/format.hpp"
+#include "util/parse_util.hpp"
 #include "util/sample_data.hpp"
 #include "util/span.hpp"
 #include "util/string_view.hpp"
 #include "util/timeline.hpp"
-#include "sim/uptime.hpp"
-#include "util/format.hpp"
+#include "util/timespan.hpp"
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 struct buff_t;
 class conduit_data_t;
@@ -113,6 +115,7 @@ public:
 
   buff_constant_behavior constant_behavior;
   buff_refresh_behavior refresh_behavior;
+  bool refresh_behavior_overridden;
   buff_refresh_duration_callback_t refresh_duration_callback;
   buff_stack_behavior stack_behavior;
   std::vector<buff_stack_change_callback_t> stack_change_callback;
@@ -131,6 +134,7 @@ public:
   bool tick_on_application; // Immediately tick when the buff first goes up, but not on refreshes
   bool partial_tick; // Allow non-full duration ticks at the end of the buff period
   bool freeze_stacks; // Do not increment/decrement stack on each tick
+  bool disable_tick_effects;
 
   // tmp data collection
 protected:
@@ -377,6 +381,7 @@ public:
   buff_t* modify_cooldown( timespan_t duration );
   buff_t* set_period( timespan_t );
   buff_t* modify_period( timespan_t );
+  buff_t* disable_ticking( bool v );
   //virtual buff_t* set_chance( double chance );
   buff_t* set_quiet( bool quiet );
   buff_t* add_invalidate( cache_e );

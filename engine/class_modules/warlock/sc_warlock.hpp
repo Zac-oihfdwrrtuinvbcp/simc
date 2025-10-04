@@ -3,6 +3,7 @@
 
 #include "player/pet_spawner.hpp"
 #include "sc_warlock_pets.hpp"
+#include "action/parse_effects.hpp"
 #include "class_modules/apl/warlock.hpp"
 
 namespace warlock
@@ -34,49 +35,56 @@ action_t* get_action( util::string_view name, Actor* actor, Args&&... args )
 
 struct warlock_td_t : public actor_target_data_t
 {
-  // Cross-spec
-  propagate_const<dot_t*> dots_drain_life;
-  propagate_const<dot_t*> dots_corruption;
+  struct debuffs_t
+  {
+    propagate_const<buff_t*> haunt;
+    propagate_const<buff_t*> shadow_embrace;
+    propagate_const<buff_t*> infirmity;
 
-  // Aff
-  propagate_const<dot_t*> dots_agony;
-  propagate_const<dot_t*> dots_seed_of_corruption;
-  propagate_const<dot_t*> dots_drain_soul;
-  propagate_const<dot_t*> dots_phantom_singularity;
-  propagate_const<dot_t*> dots_unstable_affliction;
-  propagate_const<dot_t*> dots_vile_taint;
-  propagate_const<dot_t*> dots_soul_rot;
-  propagate_const<dot_t*> dots_jackpot_ua; // TWW 11.1 4pc version of Unstable Affliction
+    // Demo
+    propagate_const<buff_t*> wicked_maw;
+    propagate_const<buff_t*> fel_sunder; // Done in owner target data for easier handling
+    propagate_const<buff_t*> doom;
 
-  propagate_const<buff_t*> debuffs_haunt;
-  propagate_const<buff_t*> debuffs_shadow_embrace;
-  propagate_const<buff_t*> debuffs_infirmity;
+    propagate_const<buff_t*> shadowburn;
+    propagate_const<buff_t*> eradication;
+    propagate_const<buff_t*> havoc;
+    propagate_const<buff_t*> pyrogenics;
+    propagate_const<buff_t*> conflagrate;
 
-  // Demo
-  propagate_const<buff_t*> debuffs_wicked_maw;
-  propagate_const<buff_t*> debuffs_fel_sunder; // Done in owner target data for easier handling
-  propagate_const<buff_t*> debuffs_doom;
+    // Diabolist
+    propagate_const<buff_t*> cloven_soul;
 
-  // Destro
-  propagate_const<dot_t*> dots_immolate;
+    // Hellcaller
+    propagate_const<buff_t*> blackened_soul; // Dummy/Hidden debuff that triggers stack collapse
+  } debuffs;
 
-  propagate_const<buff_t*> debuffs_shadowburn;
-  propagate_const<buff_t*> debuffs_eradication;
-  propagate_const<buff_t*> debuffs_havoc;
-  propagate_const<buff_t*> debuffs_pyrogenics;
-  propagate_const<buff_t*> debuffs_conflagrate;
+  struct dots_t
+  {
+    // Cross-spec
+    propagate_const<dot_t*> drain_life;
+    propagate_const<dot_t*> corruption;
 
-  // Diabolist
-  propagate_const<buff_t*> debuffs_cloven_soul;
+    // Destro
+    propagate_const<dot_t*> immolate;
 
-  // Hellcaller
-  propagate_const<dot_t*> dots_wither;
+    // Aff
+    propagate_const<dot_t*> agony;
+    propagate_const<dot_t*> seed_of_corruption;
+    propagate_const<dot_t*> drain_soul;
+    propagate_const<dot_t*> phantom_singularity;
+    propagate_const<dot_t*> unstable_affliction;
+    propagate_const<dot_t*> vile_taint;
+    propagate_const<dot_t*> soul_rot;
+    propagate_const<dot_t*> jackpot_ua; // TWW 11.1 4pc version of Unstable Affliction
 
-  propagate_const<buff_t*> debuffs_blackened_soul; // Dummy/Hidden debuff that triggers stack collapse
+    // Hellcaller
+    propagate_const<dot_t*> wither;
 
-  // Soul Harvester
-  propagate_const<dot_t*> dots_soul_anathema;
-  propagate_const<dot_t*> dots_shared_fate;
+    // Soul Harvester
+    propagate_const<dot_t*> soul_anathema;
+    propagate_const<dot_t*> shared_fate;
+  } dots;
 
   double soc_threshold; // Aff - Seed of Corruption counts damage from cross-spec spells such as Drain Life
 
@@ -92,7 +100,40 @@ struct warlock_td_t : public actor_target_data_t
   int count_affliction_dots( bool ) const;
 };
 
-struct warlock_t : public player_t
+// utility to create target_effect_t compatible functions from warlock_td_t member references
+template <typename T>
+static std::function<int( actor_target_data_t* )> d_fn( T d, bool stack = true )
+{
+  if constexpr ( std::is_invocable_v<T, warlock_td_t::debuffs_t> )
+  {
+    if ( stack )
+      return [ d ]( actor_target_data_t* t ) {
+        return std::invoke( d, static_cast< warlock_td_t*>( t )->debuffs )->check();
+      };
+    else
+      return [ d ]( actor_target_data_t* t ) {
+        return std::invoke( d, static_cast< warlock_td_t*>( t )->debuffs )->check() > 0;
+      };
+  }
+  else if constexpr ( std::is_invocable_v<T, warlock_td_t::dots_t> )
+  {
+    if ( stack )
+      return [ d ]( actor_target_data_t* t ) {
+        return std::invoke( d, static_cast< warlock_td_t*>( t )->dots )->current_stack();
+      };
+    else
+      return [ d ]( actor_target_data_t* t ) {
+        return std::invoke( d, static_cast< warlock_td_t*>( t )->dots )->is_ticking();
+      };
+  }
+  else
+  {
+    static_assert( static_false<T>, "Not a valid member of warlock_td_t" );
+    return nullptr;
+  }
+}
+
+struct warlock_t : public parse_player_effects_t
 {
 public:
   player_t* havoc_target;
@@ -104,7 +145,7 @@ public:
   int diabolic_ritual; // Used to cycle between the three different Diabolic Ritual buffs
   bool demonic_art_buff_replaced; // Used to not spawn the Demonic Art demon if the buff is replaced by another
 
-  unsigned active_pets;
+  unsigned n_active_pets;
 
   // This should hold any spell data that is guaranteed in the base class or spec, without talents or other external systems required
   struct base_t
@@ -118,7 +159,6 @@ public:
     // Affliction
     const spell_data_t* agony;
     const spell_data_t* agony_2; // Rank 2 still a separate spell (learned automatically). Grants increased max stacks
-    const spell_data_t* xavian_teachings; // Passive granted only to Affliction. Instant cast data in this spell, points to base Corruption spell (172) for the direct damage
     const spell_data_t* malefic_rapture; // This contains an old sp_coeff value, but it is most likely no longer in use
     const spell_data_t* malefic_rapture_dmg;
     const spell_data_t* potent_afflictions; // Affliction Mastery - Increased DoT and Malefic Rapture damage
@@ -187,6 +227,9 @@ public:
     // Class Tree
 
     player_talent_t demonic_inspiration; // Primary pet attack speed increase
+    const spell_data_t* demonic_inspiration_buff; // This hidden buff is applied to pets/guardians in the first heartbeat update after arise
+    player_talent_t demonic_embrace;
+    player_talent_t demonic_fortitude;
     player_talent_t wrathful_minion; // Primary pet damage increase
     player_talent_t socrethars_guile;
     player_talent_t sargerei_technique;
@@ -242,7 +285,7 @@ public:
     player_talent_t cunning_cruelty; // Note: Damage formula in the tooltip indicates this is affected by Imp. Shadow Bolt and Sargerei Technique
     const spell_data_t* shadow_bolt_volley; // Proc chance is not listed on spell data. Appears to be 50% regardless of talent. Last checked 2024-07-07
     player_talent_t infirmity; // TOCHECK: Update to Beta on 2024-07-30 changed this to an AoE application, with some weird results (currently implemented)
-    const spell_data_t* infirmity_debuff;
+    const spell_data_t* infirmity_debuff; // Guardian effect is missing from spell data. Last checked 2024-07-07
 
     player_talent_t improved_haunt;
     player_talent_t malediction;
@@ -325,7 +368,7 @@ public:
     const spell_data_t* demonic_calling_buff;
     player_talent_t fiendish_oblation;
     player_talent_t fel_sunder; // Increase damage taken debuff when hit by main pet Felstorm
-    const spell_data_t* fel_sunder_debuff;
+    const spell_data_t* fel_sunder_debuff;  // Fel Sunder lacks guardian effect, so only main pet is benefitting (bug?). Last checked 2024-07-14
 
     player_talent_t doom;
     const spell_data_t* doom_debuff;
@@ -359,13 +402,9 @@ public:
     const spell_data_t* infernal_presence;
     const spell_data_t* infernal_presence_dmg;
     player_talent_t flametouched;
+    const spell_data_t* ferocity_of_fharg_buff;
     player_talent_t immutable_hatred;
     const spell_data_t* immutable_hatred_proc;
-    player_talent_t guillotine;
-    const spell_data_t* guillotine_pet;
-    const spell_data_t* fiendish_wrath_buff;
-    const spell_data_t* fiendish_wrath_dmg; // TODO: Multiplier fixes for this
-    const spell_data_t* fel_explosion;
 
     player_talent_t master_summoner;
 
@@ -387,7 +426,6 @@ public:
     const spell_data_t* havoc_debuff; // This is a second copy of the talent data for use in places that are shared by Havoc and Mayhem
     player_talent_t pyrogenics; // Enemies affected by Rain of Fire receive debuff for increased Fire damage
     const spell_data_t* pyrogenics_debuff;
-    player_talent_t inferno;
     player_talent_t cataclysm;
 
     player_talent_t indiscriminate_flames;
@@ -434,6 +472,7 @@ public:
     player_talent_t reverse_entropy;
     const spell_data_t* reverse_entropy_buff;
     player_talent_t internal_combustion;
+    const spell_data_t* internal_combustion_dmg;
     player_talent_t demonfire_mastery;
 
     player_talent_t devastation;
@@ -513,9 +552,9 @@ public:
     player_talent_t ruination; // TODO: Check damage and buff values closer to release, affected_by lists may be on cast spell not damage in data and could be changed later by Blizzard
     const spell_data_t* ruination_buff;
     const spell_data_t* ruination_cast;
-    const spell_data_t* ruination_impact; // TODO: Demonology version appears to include a Hand of Gul'dan when summoning imps. Not currently implemented
+    const spell_data_t* ruination_impact;
     const spell_data_t* diabolic_imp;
-    const spell_data_t* diabolic_bolt; // TODO: Socrethar's Guile?
+    const spell_data_t* diabolic_bolt;
 
     // Hellcaller
     player_talent_t wither;
@@ -530,6 +569,7 @@ public:
 
     player_talent_t hatefury_rituals;
     player_talent_t bleakheart_tactics;
+    player_talent_t illhoofs_design;
 
     player_talent_t mark_of_xavius;
     player_talent_t seeds_of_their_demise;
@@ -610,11 +650,20 @@ public:
 
     // Soul Harvester
     const spell_data_t* rampaging_demonic_soul;
+    const spell_data_t* inquisitor_sh_2pc;
+    const spell_data_t* inquisitor_sh_4pc;
 
     // Diabolist
     const spell_data_t* demonic_oculus;        // TWW3 Diabolist 2pc stacking buff
     const spell_data_t* eye_blast;             // TWW3 Diablist 2pc damage proc
     const spell_data_t* demonic_intelligence;  // TWW3 Diabolist 4pc stacking buff
+    const spell_data_t* inquisitor_db_2pc;
+    const spell_data_t* inquisitor_db_4pc;
+
+    // Hellcaller
+    const spell_data_t* maintained_withering;  // TWW Hellcaller 4pc spell buff
+    const spell_data_t* inquisitor_hc_2pc;
+    const spell_data_t* inquisitor_hc_4pc;
 
   } tier;
 
@@ -624,7 +673,6 @@ public:
     propagate_const<cooldown_t*> haunt;
     propagate_const<cooldown_t*> shadowburn;
     propagate_const<cooldown_t*> soul_fire;
-    propagate_const<cooldown_t*> dimensional_rift;
     propagate_const<cooldown_t*> felstorm_icd; // Shared between Felstorm, Demonic Strength, and Guillotine TODO: Actually use this!
     propagate_const<cooldown_t*> blackened_soul; // Internal cooldown on triggering stack increase to Wither
     propagate_const<cooldown_t*> seeds_of_their_demise; // Estimated internal cooldown, a guess at how Blizzard is minimizing lucky streaks
@@ -642,8 +690,7 @@ public:
     propagate_const<buff_t*> nightfall;
     propagate_const<buff_t*> tormented_crescendo;
     propagate_const<buff_t*> malign_omen;
-    propagate_const<buff_t*> dark_harvest_haste; // One buff in game...
-    propagate_const<buff_t*> dark_harvest_crit; // ...but split into two in simc for better handling
+    propagate_const<buff_t*> dark_harvest;
     propagate_const<buff_t*> umbral_lattice; // TWW1 4pc
     propagate_const<buff_t*> jackpot_affliction;
 
@@ -840,6 +887,7 @@ public:
   std::string default_pet;
   bool disable_auto_felstorm; // For Demonology main pet
   bool normalize_destruction_mastery;
+  bool demonic_inspiration_double_dip; // Enable Demonic Inspiration double dip on main pets
   shuffled_rng_t* rain_of_chaos_rng;
   real_ppm_t* ravenous_afflictions_rng;
   real_ppm_t* jackpot_demonology_rng;
@@ -864,11 +912,14 @@ public:
   void init_special_effects() override;
   void reset() override;
   void create_options() override;
+  void parse_player_effects();
+  const spell_data_t* conditional_spell_lookup( bool fn, int id );
   void add_rng_option( warlock_t::rng_settings_t::rng_setting_t& );
   int get_spawning_imp_count(); // TODO: Decide if still needed
   timespan_t time_to_imps( int count ); // TODO: Decide if still needed
   int active_demon_count() const;
   void expendables_trigger_helper( warlock_pet_t* source ); // TODO: Move to helpers?
+  std::pair<timespan_t, timespan_t> dreadstalkers_delay_duration_adjustment_helper( const player_t& target ); // TODO: Move to helpers? or implement in call_dreadstalkers_t?
   bool min_version_check( version_check_e version ) const;
   void create_actions() override;
   void create_affliction_proc_actions();
@@ -885,20 +936,11 @@ public:
   resource_e primary_resource() const override { return RESOURCE_MANA; }
   role_e primary_role() const override { return ROLE_SPELL; }
   stat_e convert_hybrid_stat( stat_e s ) const override;
-  double matching_gear_multiplier( attribute_e attr ) const override;
-  double composite_player_multiplier( school_e school ) const override;
-  double composite_player_target_multiplier( player_t* target, school_e school ) const override;
-  double composite_player_pet_damage_multiplier( const action_state_t*, bool ) const override;
   double composite_player_target_pet_damage_multiplier( player_t* target, bool guardian ) const override;
-  void invalidate_cache( cache_e ) override;
-  double composite_spell_crit_chance() const override;
-  double composite_melee_crit_chance() const override;
-  double composite_player_critical_damage_multiplier( const action_state_t* ) const override;
-  double composite_mastery() const override;
-  double composite_rating_multiplier( rating_e ) const override;
   void init_blizzard_action_list() override;
   void combat_begin() override;
   void init_assessors() override;
+  void init_finished() override;
   std::unique_ptr<expr_t> create_expression( util::string_view name_str ) override;
   std::string default_potion() const override { return warlock_apl::potion( this ); }
   std::string default_flask() const override { return warlock_apl::flask( this ); }
@@ -906,8 +948,34 @@ public:
   std::string default_rune() const override { return warlock_apl::rune( this ); }
   std::string default_temporary_enchant() const override { return warlock_apl::temporary_enchant( this ); }
   void apply_affecting_auras( action_t& action ) override;
+  void apply_affecting_auras( buff_t& buff );
   double resource_gain( resource_e resource_type, double amount, gain_t* source = nullptr, action_t* action = nullptr ) override;
   void feast_of_souls_gain();
+
+  bool affliction() const;
+  bool demonology() const;
+  bool destruction() const;
+  bool diabolist() const;
+  bool hellcaller() const;
+  bool soul_harvester() const;
+
+  template<set_bonus_type_e Tier, hero_tree_e Hero = HERO_NONE>
+  bool active_2pc() const
+  {
+    if constexpr ( Tier == TWW3 )
+      return sets->has_set_bonus( Hero, Tier, B2 );
+    else
+      return sets->has_set_bonus( specialization(), Tier, B2 );
+  }
+
+  template<set_bonus_type_e Tier, hero_tree_e Hero = HERO_NONE>
+  bool active_4pc() const
+  {
+    if constexpr ( Tier == TWW3 )
+      return sets->has_set_bonus( Hero, Tier, B4 );
+    else
+      return sets->has_set_bonus( specialization(), Tier, B4 );
+  }
 
   target_specific_t<warlock_td_t> target_data;
 

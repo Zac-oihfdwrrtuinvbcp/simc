@@ -178,38 +178,39 @@ struct tick_t : public buff_event_t
   void execute() override
   {
     buff->tick_event = nullptr;
-    buff->current_tick++;
 
-    int total_ticks = buff->expiration.empty()
-      ? -1
-      : buff->current_tick + static_cast<int>( buff->remains() / buff->tick_time() );
-
-    if ( buff->partial_tick &&
-         ( buff->buff_duration().total_millis() % buff->tick_time().total_millis() ) != 0 )
+    if ( !buff->disable_tick_effects )
     {
-      total_ticks++;
-    }
+      buff->current_tick++;
 
-    buff->sim->print_debug( "{} {} ticks ({} of {}).",
-        *buff->player, *buff, buff->current_tick, total_ticks );
+      int total_ticks =
+          buff->expiration.empty() ? -1 : buff->current_tick + static_cast<int>( buff->remains() / buff->tick_time() );
 
-    // Tick callback is called before the aura stack count is altered to ensure
-    // that the buff is always up during the "tick". Last tick detection can be
-    // made through the int arguments passed to the function call.
-    if ( buff->tick_callback )
-    {
-      buff->tick_callback( buff, total_ticks, tick_time );
-    }
-
-    if ( !buff->freeze_stacks )
-    {
-      if ( !buff->reverse )
+      if ( buff->partial_tick && ( buff->buff_duration().total_millis() % buff->tick_time().total_millis() ) != 0 )
       {
-        buff->bump( current_stacks, current_value );
+        total_ticks++;
       }
-      else
+
+      buff->sim->print_debug( "{} {} ticks ({} of {}).", *buff->player, *buff, buff->current_tick, total_ticks );
+
+      // Tick callback is called before the aura stack count is altered to ensure
+      // that the buff is always up during the "tick". Last tick detection can be
+      // made through the int arguments passed to the function call.
+      if ( buff->tick_callback )
       {
-        buff->decrement( current_stacks, current_value );
+        buff->tick_callback( buff, total_ticks, tick_time );
+      }
+
+      if ( !buff->freeze_stacks )
+      {
+        if ( !buff->reverse )
+        {
+          buff->bump( current_stacks, current_value );
+        }
+        else
+        {
+          buff->decrement( current_stacks, current_value );
+        }
       }
     }
 
@@ -256,7 +257,7 @@ struct expiration_t : public buff_event_t
       actual_tick_time = sim().current_time() - tick_event->start_time;
     }
 
-    bool can_tick = tick_event &&
+    bool can_tick = tick_event && !buff->disable_tick_effects &&
       ( ( buff->partial_tick && actual_tick_time > 0_ms ) ||
         ( !buff->partial_tick && tick_event->tick_time == actual_tick_time ) );
 
@@ -644,6 +645,8 @@ buff_t::buff_t( sim_t* sim, player_t* target, player_t* source, util::string_vie
     base_time_duration_multiplier( 1.0 ),
     dynamic_time_duration_multiplier( 1.0 ),
     constant_behavior( buff_constant_behavior::DEFAULT ),
+    refresh_behavior( buff_refresh_behavior::NONE ),
+    refresh_behavior_overridden( false ),
     allow_precombat( true ),
     current_tick( 0 ),
     buff_period( timespan_t::min() ),
@@ -654,6 +657,7 @@ buff_t::buff_t( sim_t* sim, player_t* target, player_t* source, util::string_vie
     tick_on_application( false ),
     partial_tick( false ),
     freeze_stacks( false ),
+    disable_tick_effects( false ),
     last_start(),
     last_trigger(),
     last_expire(),
@@ -723,7 +727,9 @@ buff_t::buff_t( sim_t* sim, player_t* target, player_t* source, util::string_vie
     set_tick_time_behavior( buff_tick_time_behavior::HASTED );
   }
 
-  set_refresh_behavior( buff_refresh_behavior::NONE );
+  // Refresh behavior can be set during the `set_period` call above. If it wasn't, set it now.
+  if( refresh_behavior == buff_refresh_behavior::NONE )
+    set_refresh_behavior( buff_refresh_behavior::NONE );
 
   set_stack_behavior( buff_stack_behavior::DEFAULT );
 
@@ -1111,10 +1117,9 @@ buff_t* buff_t::modify_cooldown( timespan_t duration )
 
 buff_t* buff_t::set_period( timespan_t period )
 {
-  if ( period >= timespan_t::zero() )
-  {
+  if ( period > timespan_t::zero() )
     buff_period = period;
-  }
+
   else
   {
     for ( size_t i = 1; i <= s_data->effect_count(); i++ )
@@ -1134,6 +1139,13 @@ buff_t* buff_t::set_period( timespan_t period )
         case A_PERIODIC_TRIGGER_SPELL:
         {
           buff_period = e.period();
+          if ( !refresh_behavior_overridden && buff_duration() > timespan_t::zero() )
+          {
+            if ( data().flags( spell_attribute::SX_REFRESH_EXTENDS_DURATION ) )
+              set_refresh_behavior( buff_refresh_behavior::PANDEMIC );
+            else
+              set_refresh_behavior( buff_refresh_behavior::TICK );
+          }
           break;
         }
         default:
@@ -1151,6 +1163,12 @@ buff_t* buff_t::set_period( timespan_t period )
 buff_t* buff_t::modify_period( timespan_t duration )
 {
   set_period( buff_period + duration );
+  return this;
+}
+
+buff_t* buff_t::disable_ticking( bool v )
+{
+  disable_tick_effects = v;
   return this;
 }
 
@@ -1356,7 +1374,7 @@ buff_t* buff_t::set_refresh_behavior( buff_refresh_behavior b )
   if ( b == buff_refresh_behavior::NONE )
   {
     // In wod, default behavior for ticking buffs is to pandemic-extend the duration
-    if ( tick_behavior == buff_tick_behavior::CLIP || tick_behavior == buff_tick_behavior::REFRESH )
+    if ( buff_period > timespan_t::zero() )
     {
       refresh_behavior = buff_refresh_behavior::PANDEMIC;
     }
@@ -1369,6 +1387,7 @@ buff_t* buff_t::set_refresh_behavior( buff_refresh_behavior b )
   else
   {
     refresh_behavior = b;
+    refresh_behavior_overridden = true;
   }
   assert( refresh_behavior != buff_refresh_behavior::CUSTOM || refresh_duration_callback );
   return this;
@@ -2427,7 +2446,7 @@ void buff_t::start( int stacks, double value, timespan_t duration )
       tick_event = make_event<tick_t>( *sim, this, period, current_value, reverse ? reverse_stack_reduction : stacks );
     }
 
-    if ( ( tick_zero || ( tick_on_application && before_stacks == 0 ) ) && tick_callback )
+    if ( ( tick_zero || ( tick_on_application && before_stacks == 0 ) ) && tick_callback && !disable_tick_effects )
     {
       tick_callback( this, expiration.empty() ? -1 : static_cast<int>( remains() / period ), 0_ms );
     }
@@ -2499,7 +2518,7 @@ void buff_t::refresh( int stacks, double value, timespan_t duration )
       tick_event = make_event<tick_t>( *sim, this, period, current_value, reverse ? 1 : stacks );
     }
 
-    if ( tick_zero && tick_callback )
+    if ( tick_zero && tick_callback && !disable_tick_effects )
     {
       tick_callback( this, expiration.empty() ? -1 : static_cast<int>( remains() / tick_time() ), timespan_t::zero() );
     }
@@ -3332,7 +3351,7 @@ stat_buff_t::stat_buff_t( actor_pair_t q, util::string_view name, const spell_da
     {
       s = STAT_MAX_HEALTH;
     }
-    else if ( effect.subtype() == A_465 )
+    else if ( effect.subtype() == A_MOD_BONUS_ARMOR )
     {
       s = STAT_BONUS_ARMOR;
     }

@@ -652,7 +652,7 @@ public:
     const spell_data_t* fatal_intent_damage;
     const spell_data_t* fatal_intent_debuff;
     const spell_data_t* fatebound_coin_heads_buff;
-    const spell_data_t* fatebound_coin_heads_stacking_buff;
+    const spell_data_t* fatebound_coin_heads_initial_buff;
     const spell_data_t* fatebound_coin_tails_buff;
     const spell_data_t* fatebound_coin_tails;
     const spell_data_t* fatebound_lucky_coin_buff;
@@ -1761,10 +1761,9 @@ public:
     ab::parse_options( options );
     parse_spell_data( s );
 
-    // rogue_t sets base and min GCD to 1s by default but let's also enforce non-hasted GCDs.
-    // Even for rogue abilities that can be considered spells, hasted GCDs seem to be an exception rather than rule.
-    // Those should be set explicitly. (see Vendetta, Shadow Blades, Detection)
-    ab::gcd_type = gcd_haste_type::NONE;
+    // rogue_t sets base and min GCD to 1s by default and action_t sets 1s gcd attacks to non-hasted regardless of
+    // ability flags. There should no longer be a need to explicitly enforced non-hasted GCDs.
+    // ab::gcd_type = gcd_haste_type::NONE;
 
     // Affecting Passive Auras
     // Put ability specific ones here; class/spec wide ones with labels that can effect things like trinkets in rogue_t::apply_affecting_auras.
@@ -2134,20 +2133,6 @@ public:
     {
       const spelleffect_data_t& effect = s->effectN( i );
 
-      switch ( effect.type() )
-      {
-        case E_ADD_COMBO_POINTS:
-          if ( ab::energize_type != action_energize::NONE )
-          {
-            ab::energize_type = action_energize::ON_HIT;
-            ab::energize_amount = effect.base_value();
-            ab::energize_resource = RESOURCE_COMBO_POINT;
-          }
-          break;
-        default:
-          break;
-      }
-
       if ( effect.type() == E_APPLY_AURA && effect.subtype() == A_PERIODIC_DAMAGE )
       {
         ab::base_ta_adder = effect.bonus( p() );
@@ -2423,7 +2408,7 @@ public:
   void trigger_opportunity( const action_state_t*, rogue_attack_t* action, double modifier = 1.0 );
   void trigger_restless_blades( const action_state_t* );
   void trigger_hand_of_fate( const action_state_t*, bool biased = false, bool inevitable = false );
-  void execute_fatebound_coinflip( const action_state_t* state, fatebound_t::coinflip_e result );
+  void execute_fatebound_coinflip( const action_state_t* state, fatebound_t::coinflip_e result, timespan_t delay = timespan_t::zero() );
   void trigger_fatebound_edge_case( const action_state_t* state );
   void trigger_fate_intertwined( const action_state_t* );
   void trigger_relentless_strikes( const action_state_t* );
@@ -4197,7 +4182,7 @@ struct blade_flurry_t : public rogue_attack_t
       p()->cooldowns.blade_flurry->adjust( -precombat_seconds, false );
     }
 
-    timespan_t d = p()->buffs.blade_flurry->data().duration();
+    timespan_t d = p()->buffs.blade_flurry->buff_duration();
     if ( precombat_seconds > timespan_t::zero() && !p()->in_combat )
       d -= precombat_seconds;
 
@@ -4452,7 +4437,6 @@ struct detection_t : public rogue_spell_t
   detection_t( util::string_view name, rogue_t* p, util::string_view options_str = {} ) :
     rogue_spell_t( name, p, p->spell.detection, options_str )
   {
-    gcd_type = gcd_haste_type::ATTACK_HASTE;
     min_gcd = 750_ms; // Force 750ms min gcd because rogue player base has a 1s min.
     harmful = false;
     set_target( p );
@@ -6763,6 +6747,7 @@ struct doomblade_t : public residual_action::residual_periodic_action_t<spell_t>
     residual_action_t( name, p, p->spec.doomblade_debuff ), rogue( p )
   {
     dual = true;
+    apply_affecting_aura( p->talent.assassination.sudden_demise );
   }
 
   double composite_da_multiplier( const action_state_t* state ) const override
@@ -7266,6 +7251,13 @@ struct fatebound_coin_tails_t : public rogue_attack_t
     }
 
     return m;
+  }
+
+  void execute() override
+  {
+    rogue_attack_t::execute();
+    // Tail buff is always incremented after its damage instance
+    p()->buffs.fatebound_coin_tails->increment();
   }
 
   bool procs_blade_flurry() const override
@@ -8400,7 +8392,7 @@ struct roll_the_bones_t : public buff_t
     rogue( r )
   {
     set_cooldown( timespan_t::zero() );
-    set_period( timespan_t::zero() ); // Disable ticking
+    disable_ticking( true ); // Disable ticking
     set_refresh_behavior( buff_refresh_behavior::PANDEMIC );
 
     buffs = {
@@ -9206,41 +9198,37 @@ void actions::rogue_action_t<Base>::trigger_hand_of_fate( const action_state_t* 
   execute_fatebound_coinflip( state, result );
   if ( p()->talent.fatebound.double_jeopardy->ok() && p()->buffs.double_jeopardy->check() )
   {
-    p()->buffs.double_jeopardy->expire();
-    execute_fatebound_coinflip( state, result );
+    p()->buffs.double_jeopardy->expire( p()->bugs ? 1_ms : 0_ms );
+    execute_fatebound_coinflip( state, result, 200_ms ); 
   }
 }
 
 template <typename Base>
-void actions::rogue_action_t<Base>::execute_fatebound_coinflip( const action_state_t* state, fatebound_t::coinflip_e result )
+void actions::rogue_action_t<Base>::execute_fatebound_coinflip( const action_state_t* state, fatebound_t::coinflip_e result, timespan_t delay )
 {
-  if ( result == fatebound_t::coinflip_e::HEADS || result == fatebound_t::coinflip_e::EDGE )
-  {
-    p()->buffs.fatebound_coin_heads->increment();
-    if ( result != fatebound_t::coinflip_e::EDGE )
+  auto coin_target = state->target->is_enemy() ? state->target : p()->target;
+  make_event( *p()->sim, delay, [ this, coin_target, result ] {
+    if ( result == fatebound_t::coinflip_e::HEADS || result == fatebound_t::coinflip_e::EDGE )
     {
-      p()->buffs.fatebound_coin_tails->expire();
+      p()->buffs.fatebound_coin_heads->increment();
+      if ( result != fatebound_t::coinflip_e::EDGE )
+      {
+        p()->buffs.fatebound_coin_tails->expire();
+      }
     }
-  }
-  if ( result == fatebound_t::coinflip_e::TAILS || result == fatebound_t::coinflip_e::EDGE )
-  {
-    // Don't fling tails coins at enemies precombat, since that'll start combat (assume the player knows not to have an enemy targeted)
-    if ( !ab::is_precombat )
+    if ( result == fatebound_t::coinflip_e::TAILS || result == fatebound_t::coinflip_e::EDGE )
     {
-      auto coin_target = state->target->is_enemy() ? state->target : p()->target;
-      p()->active.fatebound.fatebound_coin_tails->trigger_secondary_action( coin_target );
+      // Don't fling tails coins at enemies precombat, since that'll start combat (assume the player knows not to have an enemy targeted)
+      if ( !ab::is_precombat )
+      {
+        p()->active.fatebound.fatebound_coin_tails->trigger_secondary_action( coin_target );
+      }
+      if ( result != fatebound_t::coinflip_e::EDGE )
+      {
+        p()->buffs.fatebound_coin_heads->expire();
+      }
     }
-    p()->buffs.fatebound_coin_tails->increment();
-    if ( result != fatebound_t::coinflip_e::EDGE )
-    {
-      p()->buffs.fatebound_coin_heads->expire();
-    }
-  }
-  // If the result is not an edge case, cancel Double Jeopardy if it has been artificially extended from the bug below.
-  if ( p()->bugs && p()->buffs.double_jeopardy->expiration_delay && result != fatebound_t::coinflip_e::EDGE )
-  {
-    p()->buffs.double_jeopardy->cancel();
-  }
+  } );
 }
 
 template <typename Base>
@@ -9249,21 +9237,24 @@ void actions::rogue_action_t<Base>::trigger_fatebound_edge_case( const action_st
   if ( !p()->talent.fatebound.edge_case->ok() )
     return;
 
+  bool is_after_jeopardy = false;
   execute_fatebound_coinflip( state, fatebound_t::coinflip_e::EDGE );
   
   if ( p()->talent.fatebound.double_jeopardy->ok() && p()->buffs.double_jeopardy->check() )
   {
-    // 2025-08-12 -- Double Jeopardy does not expire instantly, so multiple edge cases at the same moment can benefit from it.
-    //               It seems multiple edge cases at the same time will always successfully benefit from Double Jeopardy, but mixing
-    //               an edge case with a normal coinflip produces unreliable or unusual results. This mixing of edge cases and 
-    //               normal coinflips is currently not modeled.
+    // 2025-08-12 -- Double Jeopardy does not expire instantly, so multiple coin flips at the same time can benefit from it.
+    //               Multiple Edge Cases at the same time will always successfully benefit from Double Jeopardy, however
+    //               triggering a normal coinflip at the same time as an Edge Case during Double Jeopardy is both difficult
+    //               to pull off in-game and produces unusual results so it can be prevented from the APL side.
     p()->buffs.double_jeopardy->expire( p()->bugs ? 1_ms : 0_ms );
-    execute_fatebound_coinflip( state, fatebound_t::coinflip_e::EDGE );
+    execute_fatebound_coinflip( state, fatebound_t::coinflip_e::EDGE, 200_ms );
+    is_after_jeopardy = true;
   }
 
   if ( p()->set_bonuses.tww3_fatebound_2pc->ok() )
   {
-    execute_fatebound_coinflip( state, fatebound_t::coinflip_e::EDGE );
+    timespan_t delay = is_after_jeopardy ? 400_ms : 200_ms;
+    execute_fatebound_coinflip( state, fatebound_t::coinflip_e::EDGE, delay );
   }
 }
 
@@ -9931,7 +9922,7 @@ rogue_td_t::rogue_td_t( player_t* target, rogue_t* source ) :
   debuffs.flagellation = make_buff( *this, "flagellation", source->spec.flagellation_buff )
     ->set_initial_stack( 1 )
     ->set_refresh_behavior( buff_refresh_behavior::DISABLED )
-    ->set_period( timespan_t::zero() )
+    ->disable_ticking( true )
     ->set_cooldown( timespan_t::zero() );
 
   debuffs.corrupt_the_blood = make_buff( *this, "corrupt_the_blood", source->spell.corrupt_the_blood_damage )
@@ -11498,7 +11489,7 @@ void rogue_t::init_spells()
   
   // Fatebound
   spell.fatebound_coin_heads_buff = talent.fatebound.hand_of_fate->ok() ? find_spell( 452923 ) : spell_data_t::not_found();
-  spell.fatebound_coin_heads_stacking_buff = talent.fatebound.hand_of_fate->ok() ? find_spell( 456479 ) : spell_data_t::not_found();
+  spell.fatebound_coin_heads_initial_buff = talent.fatebound.hand_of_fate->ok() ? find_spell( 456479 ) : spell_data_t::not_found();
   spell.fatebound_coin_tails_buff = talent.fatebound.hand_of_fate->ok() ? find_spell( 452917 ) : spell_data_t::not_found();
   spell.fatebound_coin_tails = talent.fatebound.hand_of_fate->ok() ? find_spell( 452538 ) : spell_data_t::not_found();
   spell.fatebound_lucky_coin_buff = talent.fatebound.fateful_ending->ok() ? find_spell( 452562 ) : spell_data_t::not_found();
@@ -11613,7 +11604,7 @@ void rogue_t::init_spells()
   spec.replicating_shadows_tick = talent.subtlety.replicating_shadows->ok() ? find_spell( 394031 ) : spell_data_t::not_found();
   spec.secret_technique_attack = talent.subtlety.secret_technique->ok() ? find_spell( 280720 ) : spell_data_t::not_found();
   spec.secret_technique_clone_attack = talent.subtlety.secret_technique->ok() ? find_spell( 282449 ) : spell_data_t::not_found();
-  spec.shadowstrike_stealth_buff = spec.shadowstrike->ok() ? find_spell( 196911 ) : spell_data_t::not_found();
+  spec.shadowstrike_stealth_buff = spec.shadowstrike->ok() ? find_spell( 245623 ) : spell_data_t::not_found();
   spec.shadow_blades_attack = talent.subtlety.shadow_blades->ok() ? find_spell( 279043 ) : spell_data_t::not_found();
   spec.shadow_focus_buff = talent.subtlety.shadow_focus->ok() ? find_spell( 112942 ) : spell_data_t::not_found();
   spec.shadow_techniques_energize = spec.shadow_techniques->ok() ? find_spell( 196911 ) : spell_data_t::not_found();
@@ -12070,7 +12061,7 @@ void rogue_t::create_buffs()
   buffs.envenom = make_buff( this, "envenom", spec.envenom )
     ->set_default_value_from_effect_type( A_ADD_FLAT_MODIFIER, P_PROC_CHANCE )
     ->set_duration( timespan_t::min() )
-    ->set_period( timespan_t::zero() )
+    ->disable_ticking( true )
     ->set_refresh_behavior( buff_refresh_behavior::PANDEMIC );
   if ( talent.assassination.twist_the_knife->ok() )
   {
@@ -12228,15 +12219,16 @@ void rogue_t::create_buffs()
   // Fatebound
 
   buffs.fatebound_coin_heads = make_buff<damage_buff_t>( this, "fatebound_coin_heads", spell.fatebound_coin_heads_buff, false );
-  if ( spell.fatebound_coin_heads_buff->ok() && spell.fatebound_coin_heads_stacking_buff->ok() )
+  if ( spell.fatebound_coin_heads_buff->ok() && spell.fatebound_coin_heads_initial_buff->ok() )
   {
-    // Combine the 2% per additional stack buff (which we use as the stacking base buff) and 8% from initial stack buff (the fatebound_coin_heads_stacking_buff)
+    // Combine the 2% per additional stack buff (which we use as the stacking base buff) and 8% from initial stack buff
+    // 2025-09-27 -- The initial buff is currently bugged due to using Add Flat Modifier (107) instead of Add Percent Modifier (108)
     buffs.fatebound_coin_heads->set_direct_mod( spell.fatebound_coin_heads_buff, 1, spell.fatebound_coin_heads_buff->effectN( 1 ).percent(),
-                                                1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 1 ).percent() );
+                                                1.0 + ( this->bugs ? 0.0 : spell.fatebound_coin_heads_initial_buff->effectN( 1 ).percent() ) );
     buffs.fatebound_coin_heads->set_periodic_mod( spell.fatebound_coin_heads_buff, 2, spell.fatebound_coin_heads_buff->effectN( 2 ).percent(),
-                                                  1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 2 ).percent() );
+                                                  1.0 + ( this->bugs ? 0.0 : spell.fatebound_coin_heads_initial_buff->effectN( 2 ).percent() ) );
     buffs.fatebound_coin_heads->set_auto_attack_mod( spell.fatebound_coin_heads_buff, 5, spell.fatebound_coin_heads_buff->effectN( 5 ).percent(),
-                                                      1.0 + spell.fatebound_coin_heads_stacking_buff->effectN( 3 ).percent() );
+                                                      1.0 + spell.fatebound_coin_heads_initial_buff->effectN( 3 ).percent() );
   }
   buffs.fatebound_coin_heads
     ->set_constant_behavior( buff_constant_behavior::NEVER_CONSTANT )
@@ -12330,7 +12322,7 @@ void rogue_t::create_buffs()
     } );
 
   buffs.blindside = make_buff( this, "blindside", spec.blindside_buff )
-    ->set_default_value_from_effect_type( A_ADD_PCT_MODIFIER, P_RESOURCE_COST );
+    ->set_default_value_from_effect_type( A_ADD_PCT_MODIFIER, P_RESOURCE_COST_1 );
 
   buffs.indiscriminate_carnage = make_buff( this, "indiscriminate_carnage", spec.indiscriminate_carnage_buff )
     ->apply_affecting_aura( talent.rogue.subterfuge ); // Duration Modifer
@@ -12446,7 +12438,7 @@ void rogue_t::create_buffs()
   buffs.flagellation = make_buff( this, "flagellation_buff", spec.flagellation_buff )
     ->set_refresh_behavior( buff_refresh_behavior::DISABLED )
     ->set_cooldown( timespan_t::zero() )
-    ->set_period( timespan_t::zero() )
+    ->disable_ticking( true )
     ->set_default_value_from_effect_type( A_MOD_MASTERY_PCT )
     ->set_pct_buff_type( STAT_PCT_BUFF_MASTERY )
     ->set_stack_change_callback( [this]( buff_t*, int old_, int new_ ) {
@@ -12489,7 +12481,7 @@ void rogue_t::create_buffs()
     ->set_constant_behavior( buff_constant_behavior::NEVER_CONSTANT );
 
   buffs.goremaws_bite = make_buff( this, "goremaws_bite", spec.goremaws_bite_buff )
-    ->set_default_value_from_effect_type( A_ADD_PCT_MODIFIER, P_RESOURCE_COST );
+    ->set_default_value_from_effect_type( A_ADD_PCT_MODIFIER, P_RESOURCE_COST_1 );
   buffs.goremaws_bite->set_initial_stack( buffs.goremaws_bite->max_stack() );
 
   // Set Bonus Items ========================================================

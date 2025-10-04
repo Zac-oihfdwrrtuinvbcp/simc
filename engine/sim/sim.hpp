@@ -593,9 +593,9 @@ struct sim_t : private sc_thread_t
   int report_pets_separately;
   int report_targets;
   int report_details;
-  int report_raw_abilities;
   std::string report_merged_stats;
   bool full_damage_sources_chart;
+  bool report_all_variables;
   int report_rng;
   int hosted_html;
   int save_raid_summary;

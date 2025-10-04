@@ -810,6 +810,7 @@ public:
     int max_dg_heal_targets               = 5;
     bool fake_solidarity                  = true;
     double blessed_hammer_strikes          = 2.0;
+    int min_mastery_rating                = 0;
   } options;
   player_t* beacon_target;
 
@@ -835,6 +836,7 @@ public:
   virtual void init_scaling() override;
   virtual void create_buffs() override;
   virtual void init_special_effects() override;
+  virtual void init_initial_stats() override;
   virtual void init_rng() override;
   virtual void init_spells() override;
   virtual void init_action_list() override;
@@ -1246,7 +1248,6 @@ public:
 
   // haste scaling bools
   bool hasted_cd;
-  bool hasted_gcd;
 
   bool searing_light_disabled;
   bool always_do_capstones;
@@ -1259,7 +1260,6 @@ public:
     : ab( n, p, s ),
       affected_by( affected_by_t() ),
       hasted_cd( false ),
-      hasted_gcd( false ),
       searing_light_disabled( false ),
       always_do_capstones(false),
       clears_judgment( false ),
@@ -1378,17 +1378,6 @@ public:
     if ( hasted_cd )
     {
       ab::cooldown->hasted = hasted_cd;
-    }
-    if ( hasted_gcd )
-    {
-      if ( p()->specialization() == PALADIN_HOLY )
-      {
-        ab::gcd_type = gcd_haste_type::SPELL_HASTE;
-      }
-      else
-      {
-        ab::gcd_type = gcd_haste_type::ATTACK_HASTE;
-      }
     }
   }
 

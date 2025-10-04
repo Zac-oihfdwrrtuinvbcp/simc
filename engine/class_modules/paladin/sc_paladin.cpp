@@ -2001,8 +2001,6 @@ struct blessing_of_the_seasons_t : public paladin_spell_t
 
     harmful = false;
 
-    hasted_gcd  = true;
-
     cooldown           = p->cooldowns.blessing_of_the_seasons;
   }
 
@@ -2216,7 +2214,6 @@ struct hammer_of_light_t : public holy_power_consumer_t<paladin_melee_attack_t>
     is_hammer_of_light        = true;
     cleave_hammer             = new hammer_of_light_cleave_t( p, options_str );
     background                = !p->talents.templar.lights_guidance->ok();
-    hasted_gcd                = true;
     // This is not set by definition, since cost changes by spec
     resource_current = RESOURCE_HOLY_POWER;
     ret_cost         = data().powerN( 1 ).cost();
@@ -2715,7 +2712,6 @@ struct holy_armaments_t : public paladin_spell_t
   {
     parse_options( options_str );
     harmful            = false;
-    hasted_gcd         = true;
     name_str_reporting = "Holy Armaments";
     if ( p->talents.lightsmith.forewarning->ok() )
       apply_affecting_aura( p->talents.lightsmith.forewarning );
@@ -3003,7 +2999,10 @@ public:
       echo->base_aoe_multiplier = base_aoe_multiplier;
       echo->crit_bonus_multiplier = crit_bonus_multiplier;
       echo->triggers_higher_calling = true;
-      echo->base_multiplier *= p->talents.herald_of_the_sun.second_sunrise->effectN( 2 ).percent();
+      // ret spec aura applies +20% to second sunrise effectiveness
+      // temporary fix until register_passive_effect_modifier() is implemented
+      echo->base_multiplier *= p->talents.herald_of_the_sun.second_sunrise->effectN( 2 ).percent() +
+                               p->spec.retribution_paladin_2->effectN( 26 ).percent();
     }
   }
 
@@ -3112,7 +3111,12 @@ public:
         s->chain_target == 0 &&
         p()->cooldowns.second_sunrise_icd->up() )
     {
-      if ( rng().roll( p()->talents.herald_of_the_sun.second_sunrise->effectN( 1 ).percent() ) )
+      // ret spec aura applies +5% to second sunrise chance
+      // temporary fix until register_passive_effect_modifier() is implemented
+      auto sunrise_chance = p()->talents.herald_of_the_sun.second_sunrise->effectN( 1 ).percent() +
+                            p()->spec.retribution_paladin_2->effectN( 25 ).percent();
+
+      if ( rng().roll( sunrise_chance ) )
       {
         p()->cooldowns.second_sunrise_icd->start();
         // TODO(mserrano): verify this delay
@@ -3959,6 +3963,16 @@ void paladin_t::init_base_stats()
   base.block += passives.paladin->effectN( 7 ).percent();
 }
 
+void paladin_t::init_initial_stats()
+{
+  player_t::init_initial_stats();
+
+  if ( options.min_mastery_rating > 0 && initial.stats.mastery_rating < options.min_mastery_rating )
+  {
+    quiet = true;
+  }
+}
+
 // paladin_t::reset =========================================================
 
 void paladin_t::reset()
@@ -4125,7 +4139,8 @@ void paladin_t::create_buffs()
   buffs.blessing_of_dusk = make_buff( this, "blessing_of_dusk", find_spell( 385126 ) );
   buffs.faiths_armor     = make_buff( this, "faiths_armor", find_spell( 379017 ) )
                            ->set_default_value_from_effect( 1 )
-                           ->add_invalidate( CACHE_BONUS_ARMOR );
+                           ->add_invalidate( CACHE_BONUS_ARMOR )
+                           ->apply_affecting_aura( spec.protection_paladin );
 
   buffs.relentless_inquisitor = make_buff( this, "relentless_inquisitor", find_spell( 383389 ) )
                                     ->set_default_value( find_spell( 383389 )->effectN( 1 ).percent() )
@@ -5031,7 +5046,7 @@ double paladin_t::composite_base_armor_multiplier() const
     a *= 1.0 + talents.holy_aegis -> effectN( 1 ).percent();
 
   if ( talents.sanctified_plates->ok() )
-    a *= 1.0 + talents.sanctified_plates->effectN( 3 ).percent();
+    a *= 1.0 + ( talents.sanctified_plates->effectN( 3 ).percent() * ( 1.0 + spec.protection_paladin->effectN( 20 ).percent() ) );
 
   if ( talents.faiths_armor->ok() && buffs.faiths_armor->up() )
     a *= 1.0 + buffs.faiths_armor->default_value;
@@ -5130,6 +5145,10 @@ double paladin_t::composite_bonus_armor() const
   if ( buffs.shield_of_the_righteous->check() )
   {
     double bonus = spells.sotr_buff->effectN( 1 ).percent() * cache.strength();
+
+    if ( specialization() == PALADIN_PROTECTION )
+      bonus *= 1.0 + spec.protection_paladin->effectN( 23 ).percent();
+
     ba += bonus;
   }
   return ba;
@@ -5452,6 +5471,7 @@ void paladin_t::create_options()
   add_option( opt_int( "max_dg_heal_targets", options.max_dg_heal_targets, 0, 5 ) );
   add_option( opt_bool( "fake_solidarity", options.fake_solidarity ) );
   add_option( opt_float( "blessed_hammer_strikes", options.blessed_hammer_strikes, 1, 3 ) );
+  add_option( opt_int( "min_mastery_rating", options.min_mastery_rating ) );
 
   player_t::create_options();
 }

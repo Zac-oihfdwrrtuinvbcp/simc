@@ -5462,7 +5462,7 @@ void wayward_vrykuls_lantern( special_effect_t& effect )
         last_activation_time( timespan_t::zero() ),
         max_dur( timespan_t::zero() )
     {
-      for ( auto& s : e.player->dbc->spells_by_label( 690 ) )
+      for ( auto& s : e.player->dbc->spells_by_label( LABEL_MAJOR_COOLDOWNS ) )
         if ( s->is_class( e.player->type ) )
         {
           proc_spell_id.insert( s->id() );
@@ -6314,7 +6314,7 @@ void eye_of_kezan( special_effect_t& effect )
     {
       stat_buff = create_buff<stat_buff_t>( e.player, e.player->find_spell( 469889 ) )
                       ->set_stat_from_effect_type( A_MOD_STAT, e.driver()->effectN( 1 ).average( e ) )
-                      ->set_period( 0_ms ); // Disable Ticking on the in combat buff, its not used.
+                      ->disable_ticking( true );
 
       auto out_of_combat_buff =
           create_buff<stat_buff_t>( e.player, "eye_of_kezan_out_of_combat", e.player->find_spell( 469889 ) )
@@ -8180,7 +8180,7 @@ void ringing_ritual_mud( special_effect_t& effect )
     }
   };
 
-  effect.execute_action = create_proc_action<mudborne_t>( "ringing_ritual_mud", effect );
+  effect.execute_action = create_proc_action<mudborne_t>( "mudborne", effect );
 }
 
 void hallowed_tome( special_effect_t& effect )
@@ -8917,7 +8917,7 @@ void mind_fracturing_odium( special_effect_t& effect )
                  ->set_stat_from_effect_type( A_MOD_RATING, e.driver()->effectN( 1 ).average( e ) );
 
       stacking = create_buff<buff_t>( e.player, "mindfracturing_odium", e.driver()->effectN( 1 ).trigger() )
-                     ->set_period( 0_ms )  // Handled by the repeating event
+                     ->disable_ticking( true )
                      ->set_expire_callback( [ & ]( buff_t*, int, timespan_t ) {
                        decrementing = false;
                        stat->expire();

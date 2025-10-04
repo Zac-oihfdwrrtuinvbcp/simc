@@ -11,6 +11,7 @@
 #include "report/decorators.hpp"
 #include "sim/cooldown.hpp"
 #include "sim/sim.hpp"
+#include "util/parse_util.hpp"
 
 namespace opt_strings
 {
@@ -886,7 +887,20 @@ double parse_player_effects_t::composite_spell_crit_chance() const
   for ( const auto& i : crit_chance_effects )
     scc += get_effect_value( i );
 
+  for ( const auto& i : spell_crit_chance_effects )
+    scc += get_effect_value( i );
+
   return scc;
+}
+
+double parse_player_effects_t::composite_player_critical_damage_multiplier( const action_state_t* s ) const
+{
+  auto cdm = player_t::composite_player_critical_damage_multiplier( s );
+
+  for ( const auto& i : crit_bonus_effects )
+    cdm *= 1.0 + get_effect_value( i );
+
+  return cdm;
 }
 
 double parse_player_effects_t::composite_leech() const
@@ -1082,7 +1096,8 @@ bool parse_player_effects_t::is_valid_aura( const spelleffect_data_t& eff ) cons
     case E_APPLY_AURA:
     case E_APPLY_AURA_PET:
       // TODO: more robust logic around 'party' buffs with radius
-      if ( eff.radius() )
+      // Effect targeting type 120 is "Apply to Summons in Area", so we should allow that.
+      if ( eff.radius() && eff.target_1() != T_UNIT_SELF_AND_SUMMONS )
         return false;
       break;
     case E_APPLY_AREA_AURA_PARTY:
@@ -1155,6 +1170,15 @@ std::vector<player_effect_t>* parse_player_effects_t::get_effect_vector( const s
       str = "all crit chance";
       invalidate( CACHE_CRIT_CHANCE );
       return &crit_chance_effects;
+
+    case A_MOD_SPELL_CRIT_CHANCE:
+      str = "spell crit chance";
+      invalidate( CACHE_CRIT_CHANCE );
+      return &spell_crit_chance_effects;
+
+    case A_MOD_CRIT_DAMAGE_BONUS:
+      str = "crit damage bonus";
+      return &crit_bonus_effects;
 
     case A_MOD_DAMAGE_PERCENT_DONE:
       tmp.opt_enum = eff.misc_value1();
@@ -1354,6 +1378,8 @@ void parse_player_effects_t::parsed_effects_html( report::sc_html_stream& os )
     print_parsed_type( os, pet_multiplier_effects, "Pet Multiplier", &opt_strings::pet_type );
     print_parsed_type( os, attack_power_multiplier_effects, "Attack Power Multiplier" );
     print_parsed_type( os, crit_chance_effects, "Crit Chance" );
+    print_parsed_type( os, spell_crit_chance_effects, "Spell Crit Chance" );
+    print_parsed_type( os, crit_bonus_effects, "Crit Damage Bonus" );
     print_parsed_type( os, leech_effects, "Leech" );
     print_parsed_type( os, expertise_effects, "Expertise" );
     print_parsed_type( os, crit_avoidance_effects, "Crit Avoidance" );
@@ -1386,7 +1412,9 @@ size_t parse_player_effects_t::total_effects_count()
          player_multiplier_effects.size() +
          pet_multiplier_effects.size() +
          attack_power_multiplier_effects.size() +
-         crit_chance_effects.size() +
+         crit_chance_effects.size() + 
+         spell_crit_chance_effects.size() +
+         crit_bonus_effects.size() +
          leech_effects.size() +
          expertise_effects.size() +
          crit_avoidance_effects.size() +
@@ -1509,17 +1537,17 @@ std::vector<player_effect_t>* parse_action_base_t::get_effect_vector( const spel
   {
     switch ( eff.misc_value1() )
     {
-      case P_GENERIC:       str = "direct damage";          return &da_multiplier_effects;
-      case P_DURATION:      str = "duration";               return &dot_duration_effects;
-      case P_TICK_DAMAGE:   str = "tick damage";            return &ta_multiplier_effects;
-      case P_CAST_TIME:     str = "cast time";              return &execute_time_effects;
-      case P_GCD:           str = "gcd";                    return &gcd_effects;
-      case P_TICK_TIME:     str = "tick time";              return &tick_time_effects;
-      case P_RESOURCE_COST: str = "cost percent";           return &cost_effects;
-      case P_CRIT:          str = "crit chance multiplier"; return &crit_chance_multiplier_effects;
-      case P_CRIT_BONUS:    str = "crit bonus multiplier";  return &crit_bonus_effects;
-      case P_COOLDOWN:      str = "cooldown";               return &recharge_multiplier_effects;
-      default:              return nullptr;
+      case P_GENERIC:         str = "direct damage";          return &da_multiplier_effects;
+      case P_DURATION:        str = "duration";               return &dot_duration_effects;
+      case P_TICK_DAMAGE:     str = "tick damage";            return &ta_multiplier_effects;
+      case P_CAST_TIME:       str = "cast time";              return &execute_time_effects;
+      case P_GCD:             str = "gcd";                    return &gcd_effects;
+      case P_TICK_TIME:       str = "tick time";              return &tick_time_effects;
+      case P_RESOURCE_COST_1: str = "cost percent";           return &cost_effects;
+      case P_CRIT:            str = "crit chance multiplier"; return &crit_chance_multiplier_effects;
+      case P_CRIT_BONUS:      str = "crit bonus multiplier";  return &crit_bonus_effects;
+      case P_COOLDOWN:        str = "cooldown";               return &recharge_multiplier_effects;
+      default:                return nullptr;
     }
   }
   else if ( eff.subtype() == A_ADD_FLAT_MODIFIER || eff.subtype() == A_ADD_FLAT_LABEL_MODIFIER )
@@ -1528,14 +1556,14 @@ std::vector<player_effect_t>* parse_action_base_t::get_effect_vector( const spel
 
     switch ( eff.misc_value1() )
     {
-      case P_CAST_TIME:     val_mul = 1.0;
-                            str = "cast time";   return &flat_execute_time_effects;
-      case P_TICK_TIME:     val_mul = 1.0;
-                            str = "tick time";   return &flat_tick_time_effects;
-      case P_CRIT:          str = "crit chance"; return &crit_chance_effects;
-      case P_RESOURCE_COST: val_mul = spelleffect_data_t::resource_multiplier( _action->current_resource() );
-                            str = "flat cost";   return &flat_cost_effects;
-      default:              return nullptr;
+      case P_CAST_TIME:       val_mul = 1.0;
+                              str = "cast time";   return &flat_execute_time_effects;
+      case P_TICK_TIME:       val_mul = 1.0;
+                              str = "tick time";   return &flat_tick_time_effects;
+      case P_CRIT:            str = "crit chance"; return &crit_chance_effects;
+      case P_RESOURCE_COST_1: val_mul = spelleffect_data_t::resource_multiplier( _action->current_resource() );
+                              str = "flat cost";   return &flat_cost_effects;
+      default:                return nullptr;
     }
   }
   else if ( eff.subtype() == A_MOD_RECHARGE_TIME_PCT_CATEGORY )
